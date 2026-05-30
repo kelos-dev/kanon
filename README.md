@@ -5,13 +5,13 @@ Manage multiple coding-agent settings across multiple diverse machines.
 ## Quick start
 
 ```sh
-kanon init --home ~/.config/kanon
-kanon validate --home ~/.config/kanon
-kanon diff --home ~/.config/kanon
-kanon apply --home ~/.config/kanon
+kanon init
+kanon validate
+kanon diff
+kanon apply
 ```
 
-Use `KANON_HOME` or `--home` to point at the settings repository. Use `kanon pull` and `kanon push` for explicit git sync.
+The settings repository defaults to `~/.config/kanon`. Set `KANON_HOME` or pass `--home` to point somewhere else. Use `kanon pull` and `kanon push` for explicit git sync.
 
 ## Managed settings
 
