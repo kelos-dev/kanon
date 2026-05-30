@@ -21,10 +21,10 @@ Kanon moves your settings between three states, plus a git remote for sharing:
 
 ```mermaid
 sequenceDiagram
-    participant R as remote repo
-    participant S as source state
-    participant T as target state
     participant D as destination
+    participant T as target state
+    participant S as source state
+    participant R as remote repo
     Note over S: kanon init
     D->>S: kanon import
     Note over S: edit kanon.yaml + assets
@@ -39,10 +39,10 @@ sequenceDiagram
 
 ```mermaid
 sequenceDiagram
-    participant R as remote repo
-    participant S as source state
-    participant T as target state
     participant D as destination
+    participant T as target state
+    participant S as source state
+    participant R as remote repo
     R->>S: git clone $REPO
     S->>T: kanon render
     T-->>D: kanon diff
