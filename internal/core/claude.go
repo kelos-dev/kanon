@@ -39,25 +39,6 @@ func (claudeAdapter) Render(cfg *Config, opts TargetOptions) ([]RenderedFile, er
 	}
 
 	settings := map[string]any{}
-	permissions := map[string]any{}
-	if hasValues(cfg.Permissions.Allow) {
-		permissions["allow"] = cfg.Permissions.Allow
-	}
-	if hasValues(cfg.Permissions.Ask) {
-		permissions["ask"] = cfg.Permissions.Ask
-	}
-	if hasValues(cfg.Permissions.Deny) {
-		permissions["deny"] = cfg.Permissions.Deny
-	}
-	if cfg.Permissions.DefaultMode != "" {
-		permissions["defaultMode"] = cfg.Permissions.DefaultMode
-	}
-	if len(permissions) > 0 {
-		settings["permissions"] = permissions
-	}
-	if hasValues(cfg.Permissions.AdditionalDirectories) {
-		settings["additionalDirectories"] = cfg.Permissions.AdditionalDirectories
-	}
 	if hooks := hooksForAgent(cfg, AgentClaude); len(hooks) > 0 {
 		settings["hooks"] = hooks
 	}

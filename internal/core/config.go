@@ -204,7 +204,6 @@ func validateEnvRefs(label string, value any, errs *[]error) {
 		validateEnvRefs(label+".skills", typed.Skills, errs)
 		validateEnvRefs(label+".mcp", typed.MCP, errs)
 		validateEnvRefs(label+".hooks", typed.Hooks, errs)
-		validateEnvRefs(label+".permissions", typed.Permissions, errs)
 	case Instructions:
 		validateEnvRefs(label+".files", typed.Files, errs)
 	case []Skill:
@@ -233,10 +232,5 @@ func validateEnvRefs(label string, value any, errs *[]error) {
 	case Hook:
 		validateEnvRefs(label+".command", typed.Command, errs)
 		validateEnvRefs(label+".args", typed.Args, errs)
-	case Permissions:
-		validateEnvRefs(label+".allow", typed.Allow, errs)
-		validateEnvRefs(label+".ask", typed.Ask, errs)
-		validateEnvRefs(label+".deny", typed.Deny, errs)
-		validateEnvRefs(label+".additional_directories", typed.AdditionalDirectories, errs)
 	}
 }

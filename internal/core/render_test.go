@@ -39,11 +39,6 @@ func TestRenderUserScopedOutputs(t *testing.T) {
 			Command: "gofmt",
 			Args:    []string{"-w", "$FILE"},
 		}},
-		Permissions: Permissions{
-			ApprovalPolicy: "on-request",
-			SandboxMode:    "workspace-write",
-			Allow:          []string{"Bash(git status:*)"},
-		},
 	}
 
 	files, err := RenderAll(cfg, TargetOptions{
@@ -64,9 +59,6 @@ func TestRenderUserScopedOutputs(t *testing.T) {
 		t.Fatalf("claude instructions were not combined: %q", claudeAgents)
 	}
 	codexConfig := string(byPath[filepath.Join(userHome, ".codex", "config.toml")].Content)
-	if !strings.Contains(codexConfig, "approval_policy = 'on-request'") && !strings.Contains(codexConfig, "approval_policy = \"on-request\"") {
-		t.Fatalf("codex config missing approval policy: %s", codexConfig)
-	}
 	if !strings.Contains(codexConfig, "context-server") {
 		t.Fatalf("codex config missing MCP server: %s", codexConfig)
 	}

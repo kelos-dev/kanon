@@ -14,7 +14,6 @@ type Config struct {
 	Skills       []Skill           `yaml:"skills"`
 	MCP          MCPConfig         `yaml:"mcp"`
 	Hooks        []Hook            `yaml:"hooks"`
-	Permissions  Permissions       `yaml:"permissions"`
 	Metadata     map[string]string `yaml:"metadata"`
 }
 
@@ -69,24 +68,6 @@ type Hook struct {
 	Args    []string `yaml:"args"`
 	Timeout int      `yaml:"timeout"`
 	Async   bool     `yaml:"async"`
-}
-
-type Permissions struct {
-	Allow                 []string         `yaml:"allow"`
-	Ask                   []string         `yaml:"ask"`
-	Deny                  []string         `yaml:"deny"`
-	ApprovalPolicy        string           `yaml:"approval_policy"`
-	SandboxMode           string           `yaml:"sandbox_mode"`
-	DefaultPermissions    string           `yaml:"default_permissions"`
-	DefaultMode           string           `yaml:"default_mode"`
-	AdditionalDirectories []string         `yaml:"additional_directories"`
-	Rules                 []PermissionRule `yaml:"rules"`
-}
-
-type PermissionRule struct {
-	Pattern       []string `yaml:"pattern"`
-	Decision      string   `yaml:"decision"`
-	Justification string   `yaml:"justification"`
 }
 
 type TargetOptions struct {

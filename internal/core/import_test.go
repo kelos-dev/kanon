@@ -272,9 +272,6 @@ trust_level = "trusted"
 		t.Fatal(err)
 	}
 
-	if result.Config.Permissions.ApprovalPolicy != "on-request" || result.Config.Permissions.SandboxMode != "workspace-write" {
-		t.Fatalf("codex permissions were not normalized: %#v", result.Config.Permissions)
-	}
 	server := result.Config.MCP.Servers["github"]
 	if server.Command != "github-mcp" || !slices.Contains(server.Targets, AgentCodex) || !slices.Contains(server.Targets, AgentClaude) {
 		t.Fatalf("mcp server was not normalized and merged: %#v", server)
@@ -285,10 +282,16 @@ trust_level = "trusted"
 	if len(result.Config.Hooks) != 2 {
 		t.Fatalf("expected 2 normalized hooks, got %#v", result.Config.Hooks)
 	}
-	if result.Config.Permissions.Allow[0] != "Read(**)" || result.Config.Permissions.DefaultMode != "default" {
-		t.Fatalf("claude permissions were not normalized: %#v", result.Config.Permissions)
-	}
 	warnings := strings.Join(result.Warnings, "\n")
+	for _, want := range []string{
+		`skipped unsupported codex config field "approval_policy"`,
+		`skipped unsupported codex config field "sandbox_mode"`,
+		`skipped unsupported claude settings field "permissions"`,
+	} {
+		if !strings.Contains(warnings, want) {
+			t.Fatalf("permission field was not reported as skipped: %q\n%v", want, result.Warnings)
+		}
+	}
 	if !strings.Contains(warnings, `skipped unsupported codex config field "projects"`) {
 		t.Fatalf("unmapped codex config was not reported: %v", result.Warnings)
 	}
