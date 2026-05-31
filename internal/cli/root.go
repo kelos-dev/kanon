@@ -30,22 +30,39 @@ type options struct {
 func NewRootCommand() *cobra.Command {
 	opts := &options{agent: core.AgentAll, gitInit: true}
 	cmd := &cobra.Command{
-		Use:           "kanon",
-		Short:         "Manage coding-agent settings from a shared Kanon repository",
+		Use:   "kanon",
+		Short: "Manage coding-agent settings from a shared Kanon repository",
+		Long: `Kanon compiles one neutral settings spec into the native files that each
+coding agent expects, and keeps those files in sync across machines.
+
+It works in three states, mirroring chezmoi:
+
+  source state       kanon.yaml plus instructions/ skills/ hooks/ — the single
+                     source of truth, tracked in git
+  target state       the agent-native files compiled from the source by the
+                     per-agent adapters (codex, claude)
+  destination state  the real files on this machine (AGENTS.md, CLAUDE.md,
+                     ~/.codex, ~/.claude, and project directories)
+
+Commands move data between these states: render (source to target), diff and
+apply (target to destination), import (destination back to source), and
+pull/push/update to sync the source with a remote.`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
-	cmd.PersistentFlags().StringVar(&opts.home, "home", "", "Kanon settings repository path (defaults to KANON_HOME or ~/.config/kanon)")
+	cmd.PersistentFlags().StringVar(&opts.home, "home", "", "Kanon source repository path (defaults to KANON_HOME or ~/.config/kanon)")
 	cmd.PersistentFlags().StringVar(&opts.configPath, "config", "", "config file path (defaults to <home>/kanon.yaml)")
 	cmd.PersistentFlags().StringVar(&opts.project, "project", "", "render project-scoped agent settings into this repository")
 	cmd.PersistentFlags().StringVar(&opts.agent, "agent", core.AgentAll, "agent to manage: all, codex, or claude")
 
 	cmd.AddCommand(initCommand(opts))
 	cmd.AddCommand(validateCommand(opts))
+	cmd.AddCommand(renderCommand(opts))
 	cmd.AddCommand(diffCommand(opts))
 	cmd.AddCommand(applyCommand(opts))
 	cmd.AddCommand(statusCommand(opts))
 	cmd.AddCommand(importCommand(opts))
+	cmd.AddCommand(updateCommand(opts))
 	cmd.AddCommand(gitCommand(opts, "pull", "pull", []string{"pull", "--ff-only"}))
 	cmd.AddCommand(gitCommand(opts, "push", "push", []string{"push"}))
 	return cmd
@@ -53,12 +70,20 @@ func NewRootCommand() *cobra.Command {
 
 func initCommand(opts *options) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "init",
-		Short: "Create a Kanon settings repository",
-		RunE: func(cmd *cobra.Command, _ []string) error {
+		Use:   "init [repo]",
+		Short: "Create a new Kanon source repository, or clone one from a remote",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
 			home, err := opts.resolvedHome()
 			if err != nil {
 				return err
+			}
+			if len(args) == 1 {
+				if err := core.CloneHome(args[0], home); err != nil {
+					return err
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "Cloned %s into %s\n", args[0], home)
+				return nil
 			}
 			if err := core.InitHome(core.InitOptions{Home: home, Force: opts.force, Git: opts.gitInit}); err != nil {
 				return err
@@ -75,7 +100,7 @@ func initCommand(opts *options) *cobra.Command {
 func validateCommand(opts *options) *cobra.Command {
 	return &cobra.Command{
 		Use:   "validate",
-		Short: "Validate kanon.yaml and referenced assets",
+		Short: "Validate the source state (kanon.yaml and referenced assets)",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cfg, home, err := opts.loadConfig()
 			if err != nil {
@@ -90,10 +115,25 @@ func validateCommand(opts *options) *cobra.Command {
 	}
 }
 
+func renderCommand(opts *options) *cobra.Command {
+	return &cobra.Command{
+		Use:   "render",
+		Short: "Render the target state (agent-native files) from the source state",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			files, _, err := opts.render()
+			if err != nil {
+				return err
+			}
+			fmt.Fprint(cmd.OutOrStdout(), core.FormatRender(files))
+			return nil
+		},
+	}
+}
+
 func diffCommand(opts *options) *cobra.Command {
 	return &cobra.Command{
 		Use:   "diff",
-		Short: "Preview generated agent file changes",
+		Short: "Diff the target state against files on disk (destination)",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			plan, _, err := opts.plan(false)
 			if err != nil {
@@ -108,40 +148,9 @@ func diffCommand(opts *options) *cobra.Command {
 func applyCommand(opts *options) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "apply",
-		Short: "Apply generated agent file changes",
+		Short: "Apply the target state to disk (destination)",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			plan, state, err := opts.plan(opts.adopt)
-			if err != nil {
-				return err
-			}
-			if len(plan.Conflicts) > 0 {
-				fmt.Fprint(cmd.OutOrStdout(), core.FormatPlanDiff(plan))
-				return errors.New("resolve conflicts or pass --adopt")
-			}
-			if len(plan.Changes) == 0 {
-				fmt.Fprintln(cmd.OutOrStdout(), "No changes.")
-				return nil
-			}
-			if !opts.yes {
-				fmt.Fprint(cmd.OutOrStdout(), core.FormatPlanDiff(plan))
-				ok, err := confirm(cmd.InOrStdin(), cmd.OutOrStdout())
-				if err != nil {
-					return err
-				}
-				if !ok {
-					fmt.Fprintln(cmd.OutOrStdout(), "Apply cancelled.")
-					return nil
-				}
-			}
-			home, err := opts.resolvedHome()
-			if err != nil {
-				return err
-			}
-			if err := core.ApplyFiles(plan, state, core.ApplyOptions{KanonHome: home, Adopt: opts.adopt}); err != nil {
-				return err
-			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Applied %d file change(s).\n", len(plan.Changes))
-			return nil
+			return opts.runApply(cmd, !opts.yes)
 		},
 	}
 	cmd.Flags().BoolVar(&opts.yes, "yes", false, "apply without prompting")
@@ -152,7 +161,7 @@ func applyCommand(opts *options) *cobra.Command {
 func statusCommand(opts *options) *cobra.Command {
 	return &cobra.Command{
 		Use:   "status",
-		Short: "Show Kanon git status and rendered file drift",
+		Short: "Show source git status and destination drift",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			home, err := opts.resolvedHome()
 			if err != nil {
@@ -182,8 +191,9 @@ func statusCommand(opts *options) *cobra.Command {
 
 func importCommand(opts *options) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "import",
-		Short: "Preview or write a Kanon config from existing agent settings",
+		Use:     "import",
+		Aliases: []string{"add"},
+		Short:   "Capture existing agent files into the source state",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			target, err := opts.targetOptions()
 			if err != nil {
@@ -222,10 +232,30 @@ func importCommand(opts *options) *cobra.Command {
 	return cmd
 }
 
+func updateCommand(opts *options) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "update",
+		Short: "Pull the source repository, then render and apply (remote to destination)",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			home, err := opts.resolvedHome()
+			if err != nil {
+				return err
+			}
+			if err := core.RunGit(home, cmd.OutOrStdout(), cmd.ErrOrStderr(), "pull", "--ff-only"); err != nil {
+				return err
+			}
+			return opts.runApply(cmd, !opts.yes)
+		},
+	}
+	cmd.Flags().BoolVar(&opts.yes, "yes", false, "apply without prompting")
+	cmd.Flags().BoolVar(&opts.adopt, "adopt", false, "overwrite unmanaged or externally changed files")
+	return cmd
+}
+
 func gitCommand(opts *options, use, short string, args []string) *cobra.Command {
 	return &cobra.Command{
 		Use:   use,
-		Short: short + " the Kanon settings repository",
+		Short: short + " the Kanon source repository",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			home, err := opts.resolvedHome()
 			if err != nil {
@@ -236,23 +266,72 @@ func gitCommand(opts *options, use, short string, args []string) *cobra.Command 
 	}
 }
 
-func (opts *options) plan(adopt bool) (*core.ApplyPlan, *core.State, error) {
+// render compiles the source state into the target state: it loads and
+// validates the config, then runs the per-agent adapters. It returns the
+// rendered files and the resolved Kanon home.
+func (opts *options) render() ([]core.RenderedFile, string, error) {
 	cfg, home, err := opts.loadConfig()
 	if err != nil {
-		return nil, nil, err
+		return nil, "", err
 	}
 	if err := validationError(core.ValidateConfig(cfg, home)); err != nil {
-		return nil, nil, err
+		return nil, "", err
 	}
 	target, err := opts.targetOptions()
 	if err != nil {
-		return nil, nil, err
+		return nil, "", err
 	}
 	files, err := core.RenderAll(cfg, target)
+	if err != nil {
+		return nil, "", err
+	}
+	return files, home, nil
+}
+
+func (opts *options) plan(adopt bool) (*core.ApplyPlan, *core.State, error) {
+	files, home, err := opts.render()
 	if err != nil {
 		return nil, nil, err
 	}
 	return core.PlanFiles(files, core.ApplyOptions{KanonHome: home, Adopt: adopt})
+}
+
+// runApply plans the target state against the destination and writes the
+// changes. When confirmFirst is true it shows the diff and prompts before
+// writing. It is shared by the apply and update commands.
+func (opts *options) runApply(cmd *cobra.Command, confirmFirst bool) error {
+	plan, state, err := opts.plan(opts.adopt)
+	if err != nil {
+		return err
+	}
+	if len(plan.Conflicts) > 0 {
+		fmt.Fprint(cmd.OutOrStdout(), core.FormatPlanDiff(plan))
+		return errors.New("resolve conflicts or pass --adopt")
+	}
+	if len(plan.Changes) == 0 {
+		fmt.Fprintln(cmd.OutOrStdout(), "No changes.")
+		return nil
+	}
+	if confirmFirst {
+		fmt.Fprint(cmd.OutOrStdout(), core.FormatPlanDiff(plan))
+		ok, err := confirm(cmd.InOrStdin(), cmd.OutOrStdout())
+		if err != nil {
+			return err
+		}
+		if !ok {
+			fmt.Fprintln(cmd.OutOrStdout(), "Apply cancelled.")
+			return nil
+		}
+	}
+	home, err := opts.resolvedHome()
+	if err != nil {
+		return err
+	}
+	if err := core.ApplyFiles(plan, state, core.ApplyOptions{KanonHome: home, Adopt: opts.adopt}); err != nil {
+		return err
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "Applied %d file change(s).\n", len(plan.Changes))
+	return nil
 }
 
 func (opts *options) loadConfig() (*core.Config, string, error) {
