@@ -22,18 +22,6 @@ func normalizeCodexConfig(cfg *Config, raw map[string]any, warnings *[]string) {
 			delete(raw, "mcp_servers")
 		}
 	}
-	if value, ok := stringValue(raw["approval_policy"]); ok {
-		cfg.Permissions.ApprovalPolicy = value
-		delete(raw, "approval_policy")
-	}
-	if value, ok := stringValue(raw["sandbox_mode"]); ok {
-		cfg.Permissions.SandboxMode = value
-		delete(raw, "sandbox_mode")
-	}
-	if value, ok := stringValue(raw["default_permissions"]); ok {
-		cfg.Permissions.DefaultPermissions = value
-		delete(raw, "default_permissions")
-	}
 	if profiles, ok := raw["profiles"].(map[string]any); ok {
 		warnSkippedMap(warnings, "codex profiles", profiles)
 		delete(raw, "profiles")
@@ -57,35 +45,6 @@ func normalizeCodexHooks(cfg *Config, raw map[string]any, warnings *[]string) {
 func normalizeClaudeSettings(cfg *Config, raw map[string]any, warnings *[]string) {
 	if raw == nil {
 		return
-	}
-	if permissions, ok := raw["permissions"].(map[string]any); ok {
-		if values, ok := stringList(permissions["allow"]); ok {
-			cfg.Permissions.Allow = values
-			delete(permissions, "allow")
-		}
-		if values, ok := stringList(permissions["ask"]); ok {
-			cfg.Permissions.Ask = values
-			delete(permissions, "ask")
-		}
-		if values, ok := stringList(permissions["deny"]); ok {
-			cfg.Permissions.Deny = values
-			delete(permissions, "deny")
-		}
-		if value, ok := stringValue(permissions["defaultMode"]); ok {
-			cfg.Permissions.DefaultMode = value
-			delete(permissions, "defaultMode")
-		}
-		if len(permissions) == 0 {
-			delete(raw, "permissions")
-		}
-	}
-	if values, ok := stringList(raw["additionalDirectories"]); ok {
-		cfg.Permissions.AdditionalDirectories = values
-		delete(raw, "additionalDirectories")
-	}
-	if _, ok := stringValue(raw["disableBypassPermissionsMode"]); ok {
-		appendNormalizeWarning(warnings, "skipped unsupported claude setting %q", "disableBypassPermissionsMode")
-		delete(raw, "disableBypassPermissionsMode")
 	}
 	if hooksMap, ok := raw["hooks"].(map[string]any); ok {
 		cfg.Hooks = append(cfg.Hooks, normalizeHookMap(hooksMap, AgentClaude, warnings)...)
@@ -315,36 +274,6 @@ func mergeMCPServer(existing, incoming MCPServer) MCPServer {
 		out.DefaultApproval = incoming.DefaultApproval
 	}
 	out.Targets = mergeTargets(out.Targets, incoming.Targets)
-	return out
-}
-
-func mergePermissions(existing, incoming Permissions) Permissions {
-	out := existing
-	if out.ApprovalPolicy == "" {
-		out.ApprovalPolicy = incoming.ApprovalPolicy
-	}
-	if out.SandboxMode == "" {
-		out.SandboxMode = incoming.SandboxMode
-	}
-	if out.DefaultPermissions == "" {
-		out.DefaultPermissions = incoming.DefaultPermissions
-	}
-	if len(out.Allow) == 0 {
-		out.Allow = incoming.Allow
-	}
-	if len(out.Ask) == 0 {
-		out.Ask = incoming.Ask
-	}
-	if len(out.Deny) == 0 {
-		out.Deny = incoming.Deny
-	}
-	if len(out.AdditionalDirectories) == 0 {
-		out.AdditionalDirectories = incoming.AdditionalDirectories
-	}
-	if out.DefaultMode == "" {
-		out.DefaultMode = incoming.DefaultMode
-	}
-	out.Rules = append(out.Rules, incoming.Rules...)
 	return out
 }
 

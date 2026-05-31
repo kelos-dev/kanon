@@ -107,7 +107,6 @@ func mergeImport(dst, src *ImportResult) {
 		}
 	}
 	dst.Config.Hooks = append(dst.Config.Hooks, src.Config.Hooks...)
-	dst.Config.Permissions = mergePermissions(dst.Config.Permissions, src.Config.Permissions)
 	for rel, data := range src.Files {
 		dst.Files[rel] = data
 	}

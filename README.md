@@ -21,7 +21,6 @@ Kanon can render:
 - skills into Codex and Claude skill directories
 - MCP server definitions
 - hooks
-- permissions and Codex rules
 
 The default flow is preview first, then apply. Existing unmanaged files block writes unless `--adopt` is passed, and overwritten files are backed up under `.kanon/backups`.
 
@@ -33,7 +32,7 @@ kanon import --agent all --write
 kanon import --agent all --write --force
 ```
 
-Import previews normalize existing Codex and Claude settings into Kanon config. Imported config is neutral by default: instructions, skills, MCP servers, hooks, and permissions are lifted into top-level sections with optional `targets` when a setting only applies to some agents. Native fields that do not map to the neutral schema are skipped with warnings.
+Import previews normalize existing Codex and Claude settings into Kanon config. Imported config is neutral by default: instructions, skills, MCP servers, and hooks are lifted into top-level sections with optional `targets` when a setting only applies to some agents. Native fields that do not map to the neutral schema are skipped with warnings, including agent permission settings, which kanon does not manage.
 
 For now, import supports `--secret-policy keep` only. Secret-looking values are preserved and reported with warnings so you can move them to environment references or another secret manager manually. Future policies for env refs, omission, password managers, and encrypted secrets are tracked in code TODOs.
 

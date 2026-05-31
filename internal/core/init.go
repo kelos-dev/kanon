@@ -68,5 +68,4 @@ skills: []
 mcp:
   servers: {}
 hooks: []
-permissions: {}
 `
