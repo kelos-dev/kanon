@@ -31,6 +31,27 @@ func RenderAll(cfg *Config, opts TargetOptions) ([]RenderedFile, error) {
 	return files, nil
 }
 
+// FormatRender prints the computed target state: the agent-native files that
+// the adapters compile from the source state, each preceded by its agent and
+// destination path. It does not compare against what is currently on disk.
+func FormatRender(files []RenderedFile) string {
+	if len(files) == 0 {
+		return "No target files.\n"
+	}
+	var out strings.Builder
+	for i, file := range files {
+		if i > 0 {
+			out.WriteByte('\n')
+		}
+		fmt.Fprintf(&out, "==> [%s] %s\n", file.Agent, file.Path)
+		out.Write(file.Content)
+		if len(file.Content) > 0 && file.Content[len(file.Content)-1] != '\n' {
+			out.WriteByte('\n')
+		}
+	}
+	return out.String()
+}
+
 func adaptersFor(agent string) []Adapter {
 	switch agent {
 	case AgentCodex:
