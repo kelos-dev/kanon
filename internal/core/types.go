@@ -104,6 +104,11 @@ type RenderedFile struct {
 	Path    string
 	Content []byte
 	Mode    fs.FileMode
+	// Prunable marks a file that kanon solely generates, so it is safe to
+	// delete from the destination once the source no longer renders it.
+	// Co-owned files the agent also writes (settings.json, .claude.json,
+	// config.toml) leave this false and are never pruned.
+	Prunable bool
 }
 
 type Adapter interface {

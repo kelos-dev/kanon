@@ -90,6 +90,13 @@ The default flow is preview first (`render` / `diff`), then `apply`. Existing
 unmanaged files block writes unless `--adopt` is passed, and overwritten files
 are backed up under `.kanon/backups`.
 
+The source is the single source of truth: when you remove an instruction,
+skill, or hook from the source, `apply` deletes the file it generated so the
+destination stays a projection of the source (deletions are backed up too, and
+scoped to the selected `--agent`/`--project`). Co-owned config files that the
+agent also writes — `settings.json`, `.claude.json`, and Codex `config.toml` —
+are written but never deleted.
+
 ## Importing existing settings
 
 ```sh

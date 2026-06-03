@@ -29,10 +29,11 @@ func (codexAdapter) Render(cfg *Config, opts TargetOptions) ([]RenderedFile, err
 	}
 	if len(instructions) > 0 {
 		files = append(files, RenderedFile{
-			Agent:   AgentCodex,
-			Path:    instructionPath,
-			Content: instructions,
-			Mode:    0o644,
+			Agent:    AgentCodex,
+			Path:     instructionPath,
+			Content:  instructions,
+			Mode:     0o644,
+			Prunable: true,
 		})
 	}
 
@@ -60,10 +61,11 @@ func (codexAdapter) Render(cfg *Config, opts TargetOptions) ([]RenderedFile, err
 			return nil, err
 		}
 		files = append(files, RenderedFile{
-			Agent:   AgentCodex,
-			Path:    filepath.Join(targetRoot, "hooks.json"),
-			Content: data,
-			Mode:    0o644,
+			Agent:    AgentCodex,
+			Path:     filepath.Join(targetRoot, "hooks.json"),
+			Content:  data,
+			Mode:     0o644,
+			Prunable: true,
 		})
 	}
 

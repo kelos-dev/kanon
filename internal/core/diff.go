@@ -12,6 +12,10 @@ func FormatPlanDiff(plan *ApplyPlan) string {
 		out.WriteString(fmt.Sprintf("CONFLICT %s (%s): %s\n", conflict.Path, conflict.Agent, conflict.Reason))
 	}
 	for _, change := range plan.Changes {
+		if change.Action == "delete" {
+			out.WriteString(fmt.Sprintf("DELETE %s (%s)\n", change.Path, change.Agent))
+			continue
+		}
 		existing := change.Existing
 		if change.Action == "create" {
 			existing = nil

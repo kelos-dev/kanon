@@ -128,10 +128,11 @@ func renderSkills(cfg *Config, opts TargetOptions, agent, targetRoot string) ([]
 				return err
 			}
 			files = append(files, RenderedFile{
-				Agent:   agent,
-				Path:    filepath.Join(targetRoot, name, rel),
-				Content: data,
-				Mode:    info.Mode().Perm(),
+				Agent:    agent,
+				Path:     filepath.Join(targetRoot, name, rel),
+				Content:  data,
+				Mode:     info.Mode().Perm(),
+				Prunable: true,
 			})
 			return nil
 		})
