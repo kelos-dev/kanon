@@ -293,7 +293,17 @@ func (opts *options) plan(adopt bool) (*core.ApplyPlan, *core.State, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	return core.PlanFiles(files, core.ApplyOptions{KanonHome: home, Adopt: adopt})
+	target, err := opts.targetOptions()
+	if err != nil {
+		return nil, nil, err
+	}
+	return core.PlanFiles(files, core.ApplyOptions{
+		KanonHome: home,
+		UserHome:  target.UserHome,
+		Adopt:     adopt,
+		Agent:     target.Agent,
+		Project:   target.Project,
+	})
 }
 
 // runApply plans the target state against the destination and writes the
@@ -327,7 +337,17 @@ func (opts *options) runApply(cmd *cobra.Command, confirmFirst bool) error {
 	if err != nil {
 		return err
 	}
-	if err := core.ApplyFiles(plan, state, core.ApplyOptions{KanonHome: home, Adopt: opts.adopt}); err != nil {
+	target, err := opts.targetOptions()
+	if err != nil {
+		return err
+	}
+	if err := core.ApplyFiles(plan, state, core.ApplyOptions{
+		KanonHome: home,
+		UserHome:  target.UserHome,
+		Adopt:     opts.adopt,
+		Agent:     target.Agent,
+		Project:   target.Project,
+	}); err != nil {
 		return err
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "Applied %d file change(s).\n", len(plan.Changes))

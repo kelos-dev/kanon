@@ -31,10 +31,11 @@ func (claudeAdapter) Render(cfg *Config, opts TargetOptions) ([]RenderedFile, er
 	}
 	if len(instructions) > 0 {
 		files = append(files, RenderedFile{
-			Agent:   AgentClaude,
-			Path:    instructionPath,
-			Content: instructions,
-			Mode:    0o644,
+			Agent:    AgentClaude,
+			Path:     instructionPath,
+			Content:  instructions,
+			Mode:     0o644,
+			Prunable: true,
 		})
 	}
 
