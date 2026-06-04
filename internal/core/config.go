@@ -84,6 +84,10 @@ func ValidateConfig(cfg *Config, home string) []error {
 			continue
 		}
 		validateTargets(fmt.Sprintf("skill %q", skill.Name), skill.Targets, &errs)
+		if skill.Source != nil {
+			validateRemoteSource(fmt.Sprintf("skill %q source", skill.Name), *skill.Source, skill.Path, &errs)
+			continue
+		}
 		path := skill.Path
 		if path == "" {
 			path = filepath.Join("skills", skill.Name)
@@ -113,6 +117,26 @@ func ValidateConfig(cfg *Config, home string) []error {
 	}
 	validateEnvRefs("config", cfg, &errs)
 	return errs
+}
+
+func validateRemoteSource(label string, source RemoteSource, path string, errs *[]error) {
+	if path != "" {
+		*errs = append(*errs, fmt.Errorf("%s cannot be used with path", label))
+	}
+	if source.Type != "git" {
+		*errs = append(*errs, fmt.Errorf("%s has unsupported type %q", label, source.Type))
+	}
+	if strings.TrimSpace(source.URL) == "" {
+		*errs = append(*errs, fmt.Errorf("%s requires url", label))
+	}
+	if strings.TrimSpace(source.Ref) == "" {
+		*errs = append(*errs, fmt.Errorf("%s requires ref", label))
+	} else if strings.HasPrefix(source.Ref, "-") || strings.ContainsAny(source.Ref, "\x00\r\n") {
+		*errs = append(*errs, fmt.Errorf("%s has invalid ref %q", label, source.Ref))
+	}
+	if _, err := cleanRemoteSubdir(source.Subdir); err != nil {
+		*errs = append(*errs, fmt.Errorf("%s has invalid subdir %q: %w", label, source.Subdir, err))
+	}
 }
 
 func ResolvePath(home, path string) string {
@@ -213,7 +237,17 @@ func validateEnvRefs(label string, value any, errs *[]error) {
 	case Skill:
 		validateEnvRefs(label+".name", typed.Name, errs)
 		validateEnvRefs(label+".path", typed.Path, errs)
+		validateEnvRefs(label+".source", typed.Source, errs)
 		validateEnvRefs(label+".targets", typed.Targets, errs)
+	case *RemoteSource:
+		if typed != nil {
+			validateEnvRefs(label, *typed, errs)
+		}
+	case RemoteSource:
+		validateEnvRefs(label+".type", typed.Type, errs)
+		validateEnvRefs(label+".url", typed.URL, errs)
+		validateEnvRefs(label+".ref", typed.Ref, errs)
+		validateEnvRefs(label+".subdir", typed.Subdir, errs)
 	case MCPConfig:
 		for name, item := range typed.Servers {
 			validateEnvRefs(label+".servers."+name, item, errs)

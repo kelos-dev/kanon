@@ -22,10 +22,18 @@ type Instructions struct {
 }
 
 type Skill struct {
-	Name    string   `yaml:"name"`
-	Path    string   `yaml:"path"`
-	Targets []string `yaml:"targets"`
-	Enabled *bool    `yaml:"enabled"`
+	Name    string        `yaml:"name"`
+	Path    string        `yaml:"path"`
+	Source  *RemoteSource `yaml:"source"`
+	Targets []string      `yaml:"targets"`
+	Enabled *bool         `yaml:"enabled"`
+}
+
+type RemoteSource struct {
+	Type   string `yaml:"type"`
+	URL    string `yaml:"url"`
+	Ref    string `yaml:"ref"`
+	Subdir string `yaml:"subdir"`
 }
 
 type MCPConfig struct {

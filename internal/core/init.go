@@ -104,10 +104,16 @@ func redactCredentials(repo, output string) string {
 	if err != nil || u.User == nil {
 		return output
 	}
+	if userinfo := u.User.String(); userinfo != "" {
+		output = strings.ReplaceAll(output, userinfo, "redacted")
+	}
 	if password, ok := u.User.Password(); ok && password != "" {
 		output = strings.ReplaceAll(output, password, "redacted")
 	}
-	return strings.ReplaceAll(output, u.User.String(), "redacted")
+	if username := u.User.Username(); username != "" {
+		output = strings.ReplaceAll(output, username, "redacted")
+	}
+	return output
 }
 
 func missing(path string) bool {
