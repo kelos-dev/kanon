@@ -93,11 +93,10 @@ func renderSkills(cfg *Config, opts TargetOptions, agent, targetRoot string) ([]
 		if strings.TrimSpace(name) == "" {
 			return nil, fmt.Errorf("skill name cannot be empty")
 		}
-		source := skill.Path
-		if source == "" {
-			source = filepath.Join("skills", name)
+		source, err := skillSourcePath(opts.KanonHome, name, skill)
+		if err != nil {
+			return nil, err
 		}
-		source = ResolvePath(opts.KanonHome, source)
 		info, err := os.Stat(source)
 		if err != nil {
 			return nil, err
@@ -141,6 +140,17 @@ func renderSkills(cfg *Config, opts TargetOptions, agent, targetRoot string) ([]
 		}
 	}
 	return files, nil
+}
+
+func skillSourcePath(home, name string, skill Skill) (string, error) {
+	if skill.Source != nil {
+		return materializeRemoteSkill(home, name, *skill.Source)
+	}
+	source := skill.Path
+	if source == "" {
+		source = filepath.Join("skills", name)
+	}
+	return ResolvePath(home, source), nil
 }
 
 func hooksForAgent(cfg *Config, agent string) map[string]any {

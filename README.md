@@ -90,6 +90,25 @@ The default flow is preview first (`render` / `diff`), then `apply`. Existing
 unmanaged files block writes unless `--adopt` is passed, and overwritten files
 are backed up under `.kanon/backups`.
 
+Skills may be stored locally under `skills/<name>` or materialized from a
+pinned git source:
+
+```yaml
+skills:
+  - name: code-reviewer
+    source:
+      type: git
+      url: https://github.com/acme/agent-skills.git
+      ref: 8f3c4e2d9a1b0c7d6e5f4a3b2c1d0e9f8a7b6c5d
+      subdir: code-reviewer
+```
+
+Remote skills are fetched automatically the first time `render`, `diff`,
+`apply`, `status`, or `update` needs them. Kanon caches materialized sources
+under `.kanon/cache/sources/`, which is gitignored by the starter `.gitignore`;
+if the cache already exists, Kanon reuses it and does not refresh it. Pin `ref`
+to a commit SHA for reproducible behavior across machines.
+
 The source is the single source of truth: when you remove an instruction,
 skill, or hook from the source, `apply` deletes the file it generated so the
 destination stays a projection of the source (deletions are backed up too, and

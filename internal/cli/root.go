@@ -178,7 +178,7 @@ func statusCommand(opts *options) *cobra.Command {
 			}
 			plan, _, err := opts.plan(false)
 			if err != nil {
-				if errors.Is(err, os.ErrNotExist) {
+				if isMissingConfigError(home, opts.configPath, err) {
 					return nil
 				}
 				return err
@@ -403,6 +403,17 @@ func validationError(errs []error) error {
 		return nil
 	}
 	return errors.Join(errs...)
+}
+
+func isMissingConfigError(home, configPath string, err error) bool {
+	var pathErr *os.PathError
+	if !errors.As(err, &pathErr) || !errors.Is(pathErr.Err, os.ErrNotExist) {
+		return false
+	}
+	if configPath == "" {
+		configPath = filepath.Join(home, "kanon.yaml")
+	}
+	return filepath.Clean(pathErr.Path) == filepath.Clean(configPath)
 }
 
 func confirm(in io.Reader, out io.Writer) (bool, error) {

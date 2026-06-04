@@ -90,6 +90,44 @@ func TestUpdatePullsAndApplies(t *testing.T) {
 	}
 }
 
+func TestStatusReportsRemoteSkillMaterializationErrors(t *testing.T) {
+	userHome := t.TempDir()
+	t.Setenv("HOME", userHome)
+
+	repo := t.TempDir()
+	gitRun(t, repo, "init")
+	gitRun(t, repo, "config", "user.email", "test@example.com")
+	gitRun(t, repo, "config", "user.name", "Test")
+	writeFile(t, filepath.Join(repo, "README.md"), "not a skill\n")
+	gitRun(t, repo, "add", ".")
+	gitRun(t, repo, "commit", "-m", "missing skill")
+	ref := strings.TrimSpace(string(gitOutput(t, repo, "rev-parse", "HEAD")))
+
+	home := t.TempDir()
+	if err := core.WriteConfig(filepath.Join(home, "kanon.yaml"), &core.Config{
+		Version: 1,
+		Skills: []core.Skill{{
+			Name:   "broken",
+			Source: &core.RemoteSource{Type: "git", URL: repo, Ref: ref},
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := NewRootCommand()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"--home", home, "status"})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatalf("expected status to report remote materialization error\n%s", out.String())
+	}
+	if !strings.Contains(err.Error(), `skill "broken" source missing SKILL.md`) {
+		t.Fatalf("unexpected status error: %v\n%s", err, out.String())
+	}
+}
+
 func gitRun(t *testing.T, dir string, args ...string) {
 	t.Helper()
 	if dir != "" {
@@ -99,6 +137,19 @@ func gitRun(t *testing.T, dir string, args ...string) {
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git %v: %v: %s", args, err, out)
 	}
+}
+
+func gitOutput(t *testing.T, dir string, args ...string) []byte {
+	t.Helper()
+	if dir != "" {
+		args = append([]string{"-C", dir}, args...)
+	}
+	cmd := exec.Command("git", args...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v: %v: %s", args, err, out)
+	}
+	return out
 }
 
 func writeFile(t *testing.T, path, content string) {
