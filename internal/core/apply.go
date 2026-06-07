@@ -8,8 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
-	"time"
 )
 
 type ApplyOptions struct {
@@ -86,18 +84,13 @@ func PlanFiles(files []RenderedFile, _ ApplyOptions) (*ApplyPlan, error) {
 	return plan, nil
 }
 
-func ApplyFiles(plan *ApplyPlan, opts ApplyOptions) error {
+func ApplyFiles(plan *ApplyPlan, _ ApplyOptions) error {
 	if len(plan.Conflicts) > 0 {
 		return fmt.Errorf("cannot apply with %d conflict(s)", len(plan.Conflicts))
 	}
-	backupRoot := filepath.Join(opts.KanonHome, ".kanon", "backups", time.Now().UTC().Format("20060102T150405Z"))
 	for _, change := range plan.Changes {
 		switch change.Action {
-		case "create":
-		case "update":
-			if err := backupExisting(backupRoot, change.Path, change.Existing); err != nil {
-				return err
-			}
+		case "create", "update":
 		default:
 			return fmt.Errorf("unsupported file action %q for %s", change.Action, change.Path)
 		}
@@ -117,17 +110,4 @@ func ApplyFiles(plan *ApplyPlan, opts ApplyOptions) error {
 func HashBytes(data []byte) string {
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:])
-}
-
-func backupExisting(root, path string, data []byte) error {
-	if len(data) == 0 {
-		return nil
-	}
-	name := strings.TrimPrefix(filepath.Clean(path), string(filepath.Separator))
-	name = strings.NewReplacer(string(filepath.Separator), "__", ":", "_").Replace(name)
-	target := filepath.Join(root, name)
-	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-		return err
-	}
-	return os.WriteFile(target, data, 0o600)
 }
