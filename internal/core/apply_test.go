@@ -256,6 +256,115 @@ func TestClaudeSettingsMergeSkipsSemanticallyEqualHooks(t *testing.T) {
 	}
 }
 
+func TestClaudeSettingsDiffOnlyShowsChangedHookCommand(t *testing.T) {
+	kanonHome := t.TempDir()
+	userHome := t.TempDir()
+	settingsPath := filepath.Join(userHome, ".claude", "settings.json")
+	existing := `{
+  "permissions": {
+    "allow": [
+      "Read(**)"
+    ]
+  },
+  "hooks": {
+    "Notification": [
+      {
+        "hooks": [
+          {
+            "command": "bash -c 'echo notify' 2>>/tmp/claude-log",
+            "type": "command"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "command": "bash -c 'echo stop' 2>>/tmp/claude-log",
+            "type": "command"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "command": "bash -c 'echo pre' 2>>/tmp/claude-log",
+            "type": "command"
+          }
+        ],
+        "matcher": "Write"
+      }
+    ]
+  },
+  "theme": "dark"
+}
+`
+	writeTestFile(t, settingsPath, []byte(existing))
+	cfg := &Config{
+		Version: 1,
+		Hooks: []Hook{
+			{
+				Name:    "notify",
+				Targets: []string{AgentClaude},
+				Event:   "Notification",
+				Command: "bash -c 'echo notify' 2>>/tmp/claude-log",
+			},
+			{
+				Name:    "stop",
+				Targets: []string{AgentClaude},
+				Event:   "Stop",
+				Command: "bash -c 'echo stop' 2>>/tmp/claude-log-test",
+			},
+			{
+				Name:    "pre",
+				Targets: []string{AgentClaude},
+				Event:   "PreToolUse",
+				Matcher: "Write",
+				Command: "bash -c 'echo pre' 2>>/tmp/claude-log",
+			},
+		},
+	}
+
+	files, err := RenderAll(cfg, TargetOptions{KanonHome: kanonHome, UserHome: userHome, Agent: AgentClaude})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := PlanFiles(files, ApplyOptions{KanonHome: kanonHome})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Changes) != 1 {
+		t.Fatalf("expected one settings update, got %#v", plan.Changes)
+	}
+	diff := FormatPlanDiff(plan)
+	var changed []string
+	for _, line := range strings.Split(diff, "\n") {
+		if strings.HasPrefix(line, "---") || strings.HasPrefix(line, "+++") {
+			continue
+		}
+		if strings.HasPrefix(line, "-") || strings.HasPrefix(line, "+") {
+			changed = append(changed, line)
+		}
+	}
+	if len(changed) != 2 {
+		t.Fatalf("expected only the changed command line in diff, got %d changed lines:\n%s", len(changed), diff)
+	}
+	if !strings.Contains(diff, `-            "command": "bash -c 'echo stop' 2>>/tmp/claude-log",`) {
+		t.Fatalf("diff missing old stop command:\n%s", diff)
+	}
+	if !strings.Contains(diff, `+            "command": "bash -c 'echo stop' 2>>/tmp/claude-log-test",`) {
+		t.Fatalf("diff missing new stop command:\n%s", diff)
+	}
+	for _, noise := range []string{"permissions", "theme", "echo notify", "echo pre"} {
+		if strings.Contains(diff, noise) {
+			t.Fatalf("diff includes unrelated setting %q:\n%s", noise, diff)
+		}
+	}
+}
+
 func TestClaudeMCPMergePreservesExistingFieldsAndServers(t *testing.T) {
 	kanonHome := t.TempDir()
 	userHome := t.TempDir()
