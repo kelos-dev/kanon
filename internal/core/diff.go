@@ -47,6 +47,9 @@ func unifiedDiff(path string, oldData, newData []byte) string {
 	lines := diffLines(oldLines, newLines)
 	hunks := diffHunks(lines, diffContextLines)
 	if len(hunks) == 0 {
+		if !bytes.Equal(oldData, newData) {
+			return nonTextualDiff(path, "content differs only by line endings")
+		}
 		return ""
 	}
 	out.WriteString(fmt.Sprintf("--- %s\n+++ %s\n", path, path))
@@ -64,6 +67,10 @@ func unifiedDiff(path string, oldData, newData []byte) string {
 		out.WriteByte('\n')
 	}
 	return out.String()
+}
+
+func nonTextualDiff(path, reason string) string {
+	return fmt.Sprintf("--- %s\n+++ %s\n@@\n! %s\n", path, path, reason)
 }
 
 type diffLine struct {
