@@ -112,12 +112,17 @@ type RenderedFile struct {
 	Path    string
 	Content []byte
 	Mode    fs.FileMode
-	// Prunable marks a file that kanon solely generates, so it is safe to
-	// delete from the destination once the source no longer renders it.
-	// Co-owned files the agent also writes (settings.json, .claude.json,
-	// config.toml) leave this false and are never pruned.
-	Prunable bool
+	Merge   FileMergeStrategy
 }
+
+type FileMergeStrategy string
+
+const (
+	FileMergeReplace        FileMergeStrategy = ""
+	FileMergeCodexConfig    FileMergeStrategy = "codex_config"
+	FileMergeClaudeSettings FileMergeStrategy = "claude_settings"
+	FileMergeClaudeMCP      FileMergeStrategy = "claude_mcp"
+)
 
 type Adapter interface {
 	Name() string

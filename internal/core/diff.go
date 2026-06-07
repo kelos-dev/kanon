@@ -6,6 +6,8 @@ import (
 	"strings"
 )
 
+const diffContextLines = 3
+
 func FormatPlanDiff(plan *ApplyPlan) string {
 	var out strings.Builder
 	for _, conflict := range plan.Conflicts {
@@ -40,41 +42,148 @@ func DriftSummary(plan *ApplyPlan) string {
 
 func unifiedDiff(path string, oldData, newData []byte) string {
 	var out strings.Builder
-	out.WriteString(fmt.Sprintf("--- %s\n+++ %s\n@@\n", path, path))
 	oldLines := splitLines(oldData)
 	newLines := splitLines(newData)
-	lcs := lineLCS(oldLines, newLines)
-	i, j := 0, 0
-	for _, pair := range lcs {
-		for i < pair[0] {
-			out.WriteString("-")
-			out.WriteString(oldLines[i])
-			i++
+	lines := diffLines(oldLines, newLines)
+	hunks := diffHunks(lines, diffContextLines)
+	if len(hunks) == 0 {
+		if !bytes.Equal(oldData, newData) {
+			return nonTextualDiff(path, "content differs only by line endings")
 		}
-		for j < pair[1] {
-			out.WriteString("+")
-			out.WriteString(newLines[j])
-			j++
+		return ""
+	}
+	out.WriteString(fmt.Sprintf("--- %s\n+++ %s\n", path, path))
+	for _, hunk := range hunks {
+		out.WriteString(fmt.Sprintf("@@ -%s +%s @@\n", diffRange(hunk.oldStart, hunk.oldCount), diffRange(hunk.newStart, hunk.newCount)))
+		for _, line := range lines[hunk.start:hunk.end] {
+			out.WriteByte(line.kind)
+			out.WriteString(line.text)
+			if !strings.HasSuffix(line.text, "\n") {
+				out.WriteByte('\n')
+			}
 		}
-		out.WriteString(" ")
-		out.WriteString(oldLines[i])
-		i++
-		j++
-	}
-	for i < len(oldLines) {
-		out.WriteString("-")
-		out.WriteString(oldLines[i])
-		i++
-	}
-	for j < len(newLines) {
-		out.WriteString("+")
-		out.WriteString(newLines[j])
-		j++
 	}
 	if !strings.HasSuffix(out.String(), "\n") {
 		out.WriteByte('\n')
 	}
 	return out.String()
+}
+
+func nonTextualDiff(path, reason string) string {
+	return fmt.Sprintf("--- %s\n+++ %s\n@@\n! %s\n", path, path, reason)
+}
+
+type diffLine struct {
+	kind    byte
+	text    string
+	oldLine int
+	newLine int
+}
+
+type diffHunk struct {
+	start    int
+	end      int
+	oldStart int
+	oldCount int
+	newStart int
+	newCount int
+}
+
+func diffLines(oldLines, newLines []string) []diffLine {
+	var lines []diffLine
+	lcs := lineLCS(oldLines, newLines)
+	i, j := 0, 0
+	for _, pair := range lcs {
+		for i < pair[0] {
+			lines = append(lines, diffLine{kind: '-', text: oldLines[i], oldLine: i + 1, newLine: j + 1})
+			i++
+		}
+		for j < pair[1] {
+			lines = append(lines, diffLine{kind: '+', text: newLines[j], oldLine: i + 1, newLine: j + 1})
+			j++
+		}
+		lines = append(lines, diffLine{kind: ' ', text: oldLines[i], oldLine: i + 1, newLine: j + 1})
+		i++
+		j++
+	}
+	for i < len(oldLines) {
+		lines = append(lines, diffLine{kind: '-', text: oldLines[i], oldLine: i + 1, newLine: j + 1})
+		i++
+	}
+	for j < len(newLines) {
+		lines = append(lines, diffLine{kind: '+', text: newLines[j], oldLine: i + 1, newLine: j + 1})
+		j++
+	}
+	return lines
+}
+
+func diffHunks(lines []diffLine, context int) []diffHunk {
+	var changed []int
+	for i, line := range lines {
+		if line.kind != ' ' {
+			changed = append(changed, i)
+		}
+	}
+	if len(changed) == 0 {
+		return nil
+	}
+	var hunks []diffHunk
+	start := max(changed[0]-context, 0)
+	end := min(changed[0]+context+1, len(lines))
+	for _, index := range changed[1:] {
+		nextStart := max(index-context, 0)
+		nextEnd := min(index+context+1, len(lines))
+		if nextStart <= end {
+			end = max(end, nextEnd)
+			continue
+		}
+		hunks = append(hunks, newDiffHunk(lines, start, end))
+		start, end = nextStart, nextEnd
+	}
+	hunks = append(hunks, newDiffHunk(lines, start, end))
+	return hunks
+}
+
+func newDiffHunk(lines []diffLine, start, end int) diffHunk {
+	hunk := diffHunk{start: start, end: end}
+	for _, line := range lines[start:end] {
+		if line.kind != '+' {
+			hunk.oldCount++
+			if hunk.oldStart == 0 {
+				hunk.oldStart = line.oldLine
+			}
+		}
+		if line.kind != '-' {
+			hunk.newCount++
+			if hunk.newStart == 0 {
+				hunk.newStart = line.newLine
+			}
+		}
+	}
+	if hunk.oldStart == 0 {
+		hunk.oldStart = insertionStart(lines[start:end], true)
+	}
+	if hunk.newStart == 0 {
+		hunk.newStart = insertionStart(lines[start:end], false)
+	}
+	return hunk
+}
+
+func insertionStart(lines []diffLine, old bool) int {
+	if len(lines) == 0 {
+		return 1
+	}
+	if old {
+		return max(lines[0].oldLine-1, 0)
+	}
+	return max(lines[0].newLine-1, 0)
+}
+
+func diffRange(start, count int) string {
+	if count == 1 {
+		return fmt.Sprint(start)
+	}
+	return fmt.Sprintf("%d,%d", start, count)
 }
 
 func splitLines(data []byte) []string {

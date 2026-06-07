@@ -123,7 +123,7 @@ func TestApplyDryRunWritesNothing(t *testing.T) {
 			t.Fatalf("dry run wrote %s (err=%v)\n%s", rel, err, out.String())
 		}
 	}
-	if _, err := os.Stat(core.StatePath(home)); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(filepath.Join(home, ".kanon", "state.json")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("dry run recorded state (err=%v)", err)
 	}
 }
@@ -181,7 +181,7 @@ func TestUpdateDryRunPullsButWritesNothing(t *testing.T) {
 			t.Fatalf("dry run wrote %s (err=%v)\n%s", rel, err, out.String())
 		}
 	}
-	if _, err := os.Stat(core.StatePath(home)); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(filepath.Join(home, ".kanon", "state.json")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("dry run recorded state (err=%v)", err)
 	}
 }

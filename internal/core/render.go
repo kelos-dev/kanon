@@ -127,11 +127,10 @@ func renderSkills(cfg *Config, opts TargetOptions, agent, targetRoot string) ([]
 				return err
 			}
 			files = append(files, RenderedFile{
-				Agent:    agent,
-				Path:     filepath.Join(targetRoot, name, rel),
-				Content:  data,
-				Mode:     info.Mode().Perm(),
-				Prunable: true,
+				Agent:   agent,
+				Path:    filepath.Join(targetRoot, name, rel),
+				Content: data,
+				Mode:    info.Mode().Perm(),
 			})
 			return nil
 		})
@@ -204,11 +203,14 @@ func appendAny(existing any, item any) []any {
 }
 
 func renderJSON(value any) ([]byte, error) {
-	data, err := json.MarshalIndent(value, "", "  ")
-	if err != nil {
+	var out bytes.Buffer
+	encoder := json.NewEncoder(&out)
+	encoder.SetEscapeHTML(false)
+	encoder.SetIndent("", "  ")
+	if err := encoder.Encode(value); err != nil {
 		return nil, err
 	}
-	return append(data, '\n'), nil
+	return out.Bytes(), nil
 }
 
 func renderTOML(value any) ([]byte, error) {
