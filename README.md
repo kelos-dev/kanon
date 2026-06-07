@@ -62,6 +62,7 @@ Every command is an arrow between two states:
 | `status` | — | Source git status and destination drift |
 | `import` (alias `add`) | destination → source | Capture existing agent files into the spec |
 | `update` | remote → destination | Pull, then render and apply in one step |
+| `ui` | target ↔ destination | Review, select, and apply changes in an interactive TUI |
 | `pull` / `push` | source ↔ remote | Sync the source with a git remote |
 
 ## Quick start
@@ -71,6 +72,7 @@ kanon init     # scaffold the source repo
 kanon render   # inspect the target state
 kanon diff     # preview changes against disk
 kanon apply    # write the changes
+kanon ui       # interactively review and apply selected changes
 ```
 
 The source repository defaults to `~/.config/kanon`; set `KANON_HOME` or pass

@@ -6,26 +6,62 @@ import (
 	"strings"
 )
 
-const diffContextLines = 3
+// diffPalette holds the ANSI escapes used to colorize diff output. The zero
+// value (plainPalette) emits no escapes; the caller decides when to colorize
+// (typically only when writing to a terminal), so core never inspects the
+// terminal itself.
+type diffPalette struct {
+	add        string
+	del        string
+	context    string
+	hunk       string
+	fileHeader string
+	conflict   string
+	reset      string
+}
 
+func (p diffPalette) paint(code, s string) string {
+	if code == "" {
+		return s
+	}
+	return code + s + p.reset
+}
+
+var plainPalette = diffPalette{}
+
+var colorPalette = diffPalette{
+	add:        "\x1b[32m",   // green
+	del:        "\x1b[31m",   // red
+	hunk:       "\x1b[36m",   // cyan
+	fileHeader: "\x1b[1m",    // bold
+	conflict:   "\x1b[1;31m", // bold red
+	reset:      "\x1b[0m",
+}
+
+// FormatPlanDiff renders a plan as plain unified-diff text.
 func FormatPlanDiff(plan *ApplyPlan) string {
+	return formatPlanDiff(plan, plainPalette)
+}
+
+// FormatPlanDiffColored renders a plan as unified-diff text with ANSI color,
+// for output to a terminal.
+func FormatPlanDiffColored(plan *ApplyPlan) string {
+	return formatPlanDiff(plan, colorPalette)
+}
+
+func formatPlanDiff(plan *ApplyPlan, p diffPalette) string {
 	var out strings.Builder
 	for _, conflict := range plan.Conflicts {
-		out.WriteString(fmt.Sprintf("CONFLICT %s (%s): %s\n", conflict.Path, conflict.Agent, conflict.Reason))
+		out.WriteString(p.paint(p.conflict, fmt.Sprintf("CONFLICT %s (%s): %s", conflict.Path, conflict.Agent, conflict.Reason)))
+		out.WriteByte('\n')
 	}
 	for _, change := range plan.Changes {
 		if change.Action == "delete" {
-			out.WriteString(fmt.Sprintf("DELETE %s (%s)\n", change.Path, change.Agent))
+			out.WriteString(p.paint(p.del, fmt.Sprintf("DELETE %s (%s)", change.Path, change.Agent)))
+			out.WriteByte('\n')
 			continue
 		}
-		existing := change.Existing
-		if change.Action == "create" {
-			existing = nil
-		}
-		out.WriteString(unifiedDiff(change.Path, existing, change.File.Content))
-		if !strings.HasSuffix(out.String(), "\n") {
-			out.WriteByte('\n')
-		}
+		out.WriteString(renderUnified(DiffFileForChange(change), p))
 	}
 	if out.Len() == 0 {
 		return "No changes.\n"
@@ -38,152 +74,6 @@ func DriftSummary(plan *ApplyPlan) string {
 		return "No rendered file drift.\n"
 	}
 	return fmt.Sprintf("%d change(s), %d conflict(s).\n", len(plan.Changes), len(plan.Conflicts))
-}
-
-func unifiedDiff(path string, oldData, newData []byte) string {
-	var out strings.Builder
-	oldLines := splitLines(oldData)
-	newLines := splitLines(newData)
-	lines := diffLines(oldLines, newLines)
-	hunks := diffHunks(lines, diffContextLines)
-	if len(hunks) == 0 {
-		if !bytes.Equal(oldData, newData) {
-			return nonTextualDiff(path, "content differs only by line endings")
-		}
-		return ""
-	}
-	out.WriteString(fmt.Sprintf("--- %s\n+++ %s\n", path, path))
-	for _, hunk := range hunks {
-		out.WriteString(fmt.Sprintf("@@ -%s +%s @@\n", diffRange(hunk.oldStart, hunk.oldCount), diffRange(hunk.newStart, hunk.newCount)))
-		for _, line := range lines[hunk.start:hunk.end] {
-			out.WriteByte(line.kind)
-			out.WriteString(line.text)
-			if !strings.HasSuffix(line.text, "\n") {
-				out.WriteByte('\n')
-			}
-		}
-	}
-	if !strings.HasSuffix(out.String(), "\n") {
-		out.WriteByte('\n')
-	}
-	return out.String()
-}
-
-func nonTextualDiff(path, reason string) string {
-	return fmt.Sprintf("--- %s\n+++ %s\n@@\n! %s\n", path, path, reason)
-}
-
-type diffLine struct {
-	kind    byte
-	text    string
-	oldLine int
-	newLine int
-}
-
-type diffHunk struct {
-	start    int
-	end      int
-	oldStart int
-	oldCount int
-	newStart int
-	newCount int
-}
-
-func diffLines(oldLines, newLines []string) []diffLine {
-	var lines []diffLine
-	lcs := lineLCS(oldLines, newLines)
-	i, j := 0, 0
-	for _, pair := range lcs {
-		for i < pair[0] {
-			lines = append(lines, diffLine{kind: '-', text: oldLines[i], oldLine: i + 1, newLine: j + 1})
-			i++
-		}
-		for j < pair[1] {
-			lines = append(lines, diffLine{kind: '+', text: newLines[j], oldLine: i + 1, newLine: j + 1})
-			j++
-		}
-		lines = append(lines, diffLine{kind: ' ', text: oldLines[i], oldLine: i + 1, newLine: j + 1})
-		i++
-		j++
-	}
-	for i < len(oldLines) {
-		lines = append(lines, diffLine{kind: '-', text: oldLines[i], oldLine: i + 1, newLine: j + 1})
-		i++
-	}
-	for j < len(newLines) {
-		lines = append(lines, diffLine{kind: '+', text: newLines[j], oldLine: i + 1, newLine: j + 1})
-		j++
-	}
-	return lines
-}
-
-func diffHunks(lines []diffLine, context int) []diffHunk {
-	var changed []int
-	for i, line := range lines {
-		if line.kind != ' ' {
-			changed = append(changed, i)
-		}
-	}
-	if len(changed) == 0 {
-		return nil
-	}
-	var hunks []diffHunk
-	start := max(changed[0]-context, 0)
-	end := min(changed[0]+context+1, len(lines))
-	for _, index := range changed[1:] {
-		nextStart := max(index-context, 0)
-		nextEnd := min(index+context+1, len(lines))
-		if nextStart <= end {
-			end = max(end, nextEnd)
-			continue
-		}
-		hunks = append(hunks, newDiffHunk(lines, start, end))
-		start, end = nextStart, nextEnd
-	}
-	hunks = append(hunks, newDiffHunk(lines, start, end))
-	return hunks
-}
-
-func newDiffHunk(lines []diffLine, start, end int) diffHunk {
-	hunk := diffHunk{start: start, end: end}
-	for _, line := range lines[start:end] {
-		if line.kind != '+' {
-			hunk.oldCount++
-			if hunk.oldStart == 0 {
-				hunk.oldStart = line.oldLine
-			}
-		}
-		if line.kind != '-' {
-			hunk.newCount++
-			if hunk.newStart == 0 {
-				hunk.newStart = line.newLine
-			}
-		}
-	}
-	if hunk.oldStart == 0 {
-		hunk.oldStart = insertionStart(lines[start:end], true)
-	}
-	if hunk.newStart == 0 {
-		hunk.newStart = insertionStart(lines[start:end], false)
-	}
-	return hunk
-}
-
-func insertionStart(lines []diffLine, old bool) int {
-	if len(lines) == 0 {
-		return 1
-	}
-	if old {
-		return max(lines[0].oldLine-1, 0)
-	}
-	return max(lines[0].newLine-1, 0)
-}
-
-func diffRange(start, count int) string {
-	if count == 1 {
-		return fmt.Sprint(start)
-	}
-	return fmt.Sprintf("%d,%d", start, count)
 }
 
 func splitLines(data []byte) []string {

@@ -64,6 +64,7 @@ pull/push/update to sync the source with a remote.`,
 	cmd.AddCommand(statusCommand(opts))
 	cmd.AddCommand(importCommand(opts))
 	cmd.AddCommand(updateCommand(opts))
+	cmd.AddCommand(uiCommand(opts))
 	cmd.AddCommand(gitCommand(opts, "pull", "pull", []string{"pull", "--ff-only"}))
 	cmd.AddCommand(gitCommand(opts, "push", "push", []string{"push"}))
 	return cmd
@@ -140,7 +141,7 @@ func diffCommand(opts *options) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			fmt.Fprint(cmd.OutOrStdout(), core.FormatPlanDiff(plan))
+			fmt.Fprint(cmd.OutOrStdout(), planDiff(cmd, plan))
 			return nil
 		},
 	}
@@ -318,7 +319,7 @@ func (opts *options) runApply(cmd *cobra.Command, confirmFirst bool) error {
 		return err
 	}
 	if len(plan.Conflicts) > 0 {
-		fmt.Fprint(cmd.OutOrStdout(), core.FormatPlanDiff(plan))
+		fmt.Fprint(cmd.OutOrStdout(), planDiff(cmd, plan))
 		return errors.New("resolve conflicts")
 	}
 	if len(plan.Changes) == 0 {
@@ -326,12 +327,12 @@ func (opts *options) runApply(cmd *cobra.Command, confirmFirst bool) error {
 		return nil
 	}
 	if opts.dryRun {
-		fmt.Fprint(cmd.OutOrStdout(), core.FormatPlanDiff(plan))
+		fmt.Fprint(cmd.OutOrStdout(), planDiff(cmd, plan))
 		fmt.Fprintf(cmd.OutOrStdout(), "Dry run: would apply %d file change(s); nothing written.\n", len(plan.Changes))
 		return nil
 	}
 	if confirmFirst {
-		fmt.Fprint(cmd.OutOrStdout(), core.FormatPlanDiff(plan))
+		fmt.Fprint(cmd.OutOrStdout(), planDiff(cmd, plan))
 		ok, err := confirm(cmd.InOrStdin(), cmd.OutOrStdout())
 		if err != nil {
 			return err
