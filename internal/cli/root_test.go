@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -87,6 +88,101 @@ func TestUpdatePullsAndApplies(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "Applied") {
 		t.Fatalf("expected apply confirmation, got: %s", out.String())
+	}
+}
+
+func TestApplyDryRunWritesNothing(t *testing.T) {
+	userHome := t.TempDir()
+	t.Setenv("HOME", userHome)
+
+	home := t.TempDir()
+	if err := core.InitHome(core.InitOptions{Home: home}); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := NewRootCommand()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"--home", home, "apply", "-n"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("apply -n failed: %v\n%s", err, out.String())
+	}
+
+	if !strings.Contains(out.String(), "Dry run") {
+		t.Fatalf("expected dry-run notice, got: %s", out.String())
+	}
+	// The full plan diff — not just the summary line — must be printed.
+	for _, want := range []string{"CLAUDE.md", "AGENTS.md", "+++ "} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("dry run output missing %q; plan diff body not printed?\n%s", want, out.String())
+		}
+	}
+	for _, rel := range []string{".codex/AGENTS.md", ".claude/CLAUDE.md"} {
+		if _, err := os.Stat(filepath.Join(userHome, rel)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("dry run wrote %s (err=%v)\n%s", rel, err, out.String())
+		}
+	}
+	if _, err := os.Stat(core.StatePath(home)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("dry run recorded state (err=%v)", err)
+	}
+}
+
+func TestUpdateDryRunPullsButWritesNothing(t *testing.T) {
+	userHome := t.TempDir()
+	t.Setenv("HOME", userHome)
+
+	// Build a source repository to act as the remote upstream.
+	remote := t.TempDir()
+	gitRun(t, remote, "init")
+	gitRun(t, remote, "config", "user.email", "test@example.com")
+	gitRun(t, remote, "config", "user.name", "Test")
+	writeFile(t, filepath.Join(remote, "kanon.yaml"), "version: 1\ninstructions:\n  files:\n    - instructions/shared.md\n")
+	writeFile(t, filepath.Join(remote, "instructions", "shared.md"), "# Shared Agent Instructions\n\nBe careful.\n")
+	gitRun(t, remote, "add", ".")
+	gitRun(t, remote, "commit", "-m", "initial")
+
+	// Clone it into the Kanon home so `git pull --ff-only` has an upstream.
+	home := filepath.Join(t.TempDir(), "home")
+	gitRun(t, "", "clone", remote, home)
+
+	// Add a new commit upstream so the dry-run update has something to pull.
+	writeFile(t, filepath.Join(remote, "instructions", "shared.md"), "# Shared Agent Instructions\n\nBe careful and kind.\n")
+	gitRun(t, remote, "add", ".")
+	gitRun(t, remote, "commit", "-m", "second")
+	want := strings.TrimSpace(string(gitOutput(t, remote, "rev-parse", "HEAD")))
+
+	cmd := NewRootCommand()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"--home", home, "update", "-n"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("update -n failed: %v\n%s", err, out.String())
+	}
+
+	if !strings.Contains(out.String(), "Dry run") {
+		t.Fatalf("expected dry-run notice, got: %s", out.String())
+	}
+	// The plan diff must be printed and reflect the pulled source: "kind" only
+	// exists in the upstream commit fetched by the dry-run pull.
+	for _, want := range []string{"CLAUDE.md", "AGENTS.md", "+++ ", "Be careful and kind"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("dry run output missing %q; plan diff body not printed or stale?\n%s", want, out.String())
+		}
+	}
+	// The pull still runs in dry-run mode, so the source repo fast-forwards.
+	if got := strings.TrimSpace(string(gitOutput(t, home, "rev-parse", "HEAD"))); got != want {
+		t.Fatalf("update -n did not pull: home HEAD=%s want=%s\n%s", got, want, out.String())
+	}
+	// But the destination is left untouched and no state is recorded.
+	for _, rel := range []string{".codex/AGENTS.md", ".claude/CLAUDE.md"} {
+		if _, err := os.Stat(filepath.Join(userHome, rel)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("dry run wrote %s (err=%v)\n%s", rel, err, out.String())
+		}
+	}
+	if _, err := os.Stat(core.StatePath(home)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("dry run recorded state (err=%v)", err)
 	}
 }
 

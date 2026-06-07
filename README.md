@@ -88,7 +88,11 @@ From the source state, Kanon renders:
 
 The default flow is preview first (`render` / `diff`), then `apply`. Existing
 unmanaged files block writes unless `--adopt` is passed, and overwritten files
-are backed up under `.kanon/backups`.
+are backed up under `.kanon/backups`. Both `apply` and `update` accept
+`--dry-run` (`-n`) to print the changes they would make — including pruned
+deletions — without touching the destination. For `update`, the `git pull`
+still runs (so the preview reflects the updated source); only the destination
+writes are skipped.
 
 Skills may be stored locally under `skills/<name>` or materialized from a
 pinned git source:

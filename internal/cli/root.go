@@ -20,6 +20,7 @@ type options struct {
 	agent             string
 	yes               bool
 	adopt             bool
+	dryRun            bool
 	force             bool
 	write             bool
 	gitInit           bool
@@ -155,6 +156,7 @@ func applyCommand(opts *options) *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&opts.yes, "yes", false, "apply without prompting")
 	cmd.Flags().BoolVar(&opts.adopt, "adopt", false, "overwrite unmanaged or externally changed files")
+	cmd.Flags().BoolVarP(&opts.dryRun, "dry-run", "n", false, "show what apply would change without writing")
 	return cmd
 }
 
@@ -249,6 +251,7 @@ func updateCommand(opts *options) *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&opts.yes, "yes", false, "apply without prompting")
 	cmd.Flags().BoolVar(&opts.adopt, "adopt", false, "overwrite unmanaged or externally changed files")
+	cmd.Flags().BoolVarP(&opts.dryRun, "dry-run", "n", false, "pull, then show what apply would change without writing")
 	return cmd
 }
 
@@ -320,6 +323,11 @@ func (opts *options) runApply(cmd *cobra.Command, confirmFirst bool) error {
 	}
 	if len(plan.Changes) == 0 {
 		fmt.Fprintln(cmd.OutOrStdout(), "No changes.")
+		return nil
+	}
+	if opts.dryRun {
+		fmt.Fprint(cmd.OutOrStdout(), core.FormatPlanDiff(plan))
+		fmt.Fprintf(cmd.OutOrStdout(), "Dry run: would apply %d file change(s); nothing written.\n", len(plan.Changes))
 		return nil
 	}
 	if confirmFirst {
