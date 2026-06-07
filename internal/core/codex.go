@@ -8,20 +8,19 @@ import (
 
 type codexAdapter struct{}
 
+type codexDestination struct {
+	targetRoot      string
+	instructionPath string
+	skillRoot       string
+}
+
 func (codexAdapter) Name() string {
 	return AgentCodex
 }
 
 func (codexAdapter) Render(cfg *Config, opts TargetOptions) ([]RenderedFile, error) {
 	var files []RenderedFile
-	targetRoot := filepath.Join(opts.UserHome, ".codex")
-	instructionPath := filepath.Join(targetRoot, "AGENTS.md")
-	skillRoot := filepath.Join(opts.UserHome, ".agents", "skills")
-	if opts.Project != "" {
-		targetRoot = filepath.Join(opts.Project, ".codex")
-		instructionPath = filepath.Join(opts.Project, "AGENTS.md")
-		skillRoot = filepath.Join(opts.Project, ".agents", "skills")
-	}
+	dest := codexDestinationFor(opts)
 
 	instructions, err := readInstruction(opts.KanonHome, cfg.Instructions.Files)
 	if err != nil {
@@ -29,11 +28,10 @@ func (codexAdapter) Render(cfg *Config, opts TargetOptions) ([]RenderedFile, err
 	}
 	if len(instructions) > 0 {
 		files = append(files, RenderedFile{
-			Agent:    AgentCodex,
-			Path:     instructionPath,
-			Content:  instructions,
-			Mode:     0o644,
-			Prunable: true,
+			Agent:   AgentCodex,
+			Path:    dest.instructionPath,
+			Content: instructions,
+			Mode:    0o644,
 		})
 	}
 
@@ -48,9 +46,10 @@ func (codexAdapter) Render(cfg *Config, opts TargetOptions) ([]RenderedFile, err
 		}
 		files = append(files, RenderedFile{
 			Agent:   AgentCodex,
-			Path:    filepath.Join(targetRoot, "config.toml"),
+			Path:    filepath.Join(dest.targetRoot, "config.toml"),
 			Content: data,
 			Mode:    0o644,
+			Merge:   FileMergeCodexConfig,
 		})
 	}
 
@@ -61,15 +60,14 @@ func (codexAdapter) Render(cfg *Config, opts TargetOptions) ([]RenderedFile, err
 			return nil, err
 		}
 		files = append(files, RenderedFile{
-			Agent:    AgentCodex,
-			Path:     filepath.Join(targetRoot, "hooks.json"),
-			Content:  data,
-			Mode:     0o644,
-			Prunable: true,
+			Agent:   AgentCodex,
+			Path:    filepath.Join(dest.targetRoot, "hooks.json"),
+			Content: data,
+			Mode:    0o644,
 		})
 	}
 
-	skills, err := renderSkills(cfg, opts, AgentCodex, skillRoot)
+	skills, err := renderSkills(cfg, opts, AgentCodex, dest.skillRoot)
 	if err != nil {
 		return nil, err
 	}
@@ -121,4 +119,18 @@ func (codexAdapter) Import(opts ImportOptions) (*ImportResult, error) {
 		return nil, err
 	}
 	return result, nil
+}
+
+func codexDestinationFor(opts TargetOptions) codexDestination {
+	dest := codexDestination{
+		targetRoot:      filepath.Join(opts.UserHome, ".codex"),
+		instructionPath: filepath.Join(opts.UserHome, ".codex", "AGENTS.md"),
+		skillRoot:       filepath.Join(opts.UserHome, ".agents", "skills"),
+	}
+	if opts.Project != "" {
+		dest.targetRoot = filepath.Join(opts.Project, ".codex")
+		dest.instructionPath = filepath.Join(opts.Project, "AGENTS.md")
+		dest.skillRoot = filepath.Join(opts.Project, ".agents", "skills")
+	}
+	return dest
 }

@@ -77,7 +77,7 @@ The source repository defaults to `~/.config/kanon`; set `KANON_HOME` or pass
 `--home` to point elsewhere. On another machine, `kanon update` pulls and applies
 in one step; use `kanon pull` / `kanon push` for explicit git sync.
 
-## Managed settings
+## Rendered settings
 
 From the source state, Kanon renders:
 
@@ -86,13 +86,15 @@ From the source state, Kanon renders:
 - MCP server definitions
 - hooks
 
-The default flow is preview first (`render` / `diff`), then `apply`. Existing
-unmanaged files block writes unless `--adopt` is passed, and overwritten files
-are backed up under `.kanon/backups`. Both `apply` and `update` accept
-`--dry-run` (`-n`) to print the changes they would make — including pruned
-deletions — without touching the destination. For `update`, the `git pull`
-still runs (so the preview reflects the updated source); only the destination
-writes are skipped.
+The default flow is preview first (`render` / `diff`), then `apply`. Rendered
+files are compared directly with the destination and overwritten when they
+differ; overwritten files are backed up under `.kanon/backups`. Files that are
+not rendered by the current source are outside the apply plan: Kanon does not
+scan for them, list them, delete them, or keep destination state for them. Both
+`apply` and `update` accept `--dry-run` (`-n`) to print the changes they would
+make without touching the destination. For `update`, the `git pull` still runs
+(so the preview reflects the updated source); only the destination writes are
+skipped.
 
 Skills may be stored locally under `skills/<name>` or materialized from a
 pinned git source:
@@ -113,12 +115,12 @@ under `.kanon/cache/sources/`, which is gitignored by the starter `.gitignore`;
 if the cache already exists, Kanon reuses it and does not refresh it. Pin `ref`
 to a commit SHA for reproducible behavior across machines.
 
-The source is the single source of truth: when you remove an instruction,
-skill, or hook from the source, `apply` deletes the file it generated so the
-destination stays a projection of the source (deletions are backed up too, and
-scoped to the selected `--agent`/`--project`). Co-owned config files that the
-agent also writes — `settings.json`, `.claude.json`, and Codex `config.toml` —
-are written but never deleted.
+Co-owned config files that the agent also writes are merged instead of replaced.
+For Codex `config.toml` and Claude `.claude.json` / project `.mcp.json`, Kanon
+updates the MCP server entries named in the source and preserves other fields
+and server entries. For Claude `settings.json`, Kanon updates the rendered
+`hooks` section and preserves other settings. If an existing co-owned config
+cannot be parsed, the merge stops with an error and the file is left untouched.
 
 ## Importing existing settings
 

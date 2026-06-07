@@ -1,14 +1,18 @@
 package core
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
-func TestPlanApplyBlocksUnmanagedFileUnlessAdopted(t *testing.T) {
+func TestApplyUpdatesExistingRenderedFileWithoutAdoptAndIgnoresOldState(t *testing.T) {
 	kanonHome := t.TempDir()
 	target := filepath.Join(t.TempDir(), "AGENTS.md")
+	statePath := oldStatePath(kanonHome)
+	writeTestFile(t, statePath, []byte("{not-json"))
 	writeTestFile(t, target, []byte("hand edited\n"))
 	file := RenderedFile{
 		Agent:   AgentCodex,
@@ -17,22 +21,14 @@ func TestPlanApplyBlocksUnmanagedFileUnlessAdopted(t *testing.T) {
 		Mode:    0o644,
 	}
 
-	plan, _, err := PlanFiles([]RenderedFile{file}, ApplyOptions{KanonHome: kanonHome})
+	plan, err := PlanFiles([]RenderedFile{file}, ApplyOptions{KanonHome: kanonHome})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(plan.Conflicts) != 1 {
-		t.Fatalf("expected unmanaged-file conflict, got %#v", plan.Conflicts)
+	if len(plan.Conflicts) != 0 || len(plan.Changes) != 1 || plan.Changes[0].Action != "update" {
+		t.Fatalf("expected direct update, got changes=%#v conflicts=%#v", plan.Changes, plan.Conflicts)
 	}
-
-	plan, state, err := PlanFiles([]RenderedFile{file}, ApplyOptions{KanonHome: kanonHome, Adopt: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(plan.Conflicts) != 0 || len(plan.Changes) != 1 {
-		t.Fatalf("expected adopted update, got changes=%d conflicts=%d", len(plan.Changes), len(plan.Conflicts))
-	}
-	if err := ApplyFiles(plan, state, ApplyOptions{KanonHome: kanonHome, Adopt: true}); err != nil {
+	if err := ApplyFiles(plan, ApplyOptions{KanonHome: kanonHome}); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(target)
@@ -42,218 +38,306 @@ func TestPlanApplyBlocksUnmanagedFileUnlessAdopted(t *testing.T) {
 	if string(data) != "generated\n" {
 		t.Fatalf("target was not written: %q", data)
 	}
-	state, err = LoadState(kanonHome)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := state.Files[target].Hash; got != HashBytes(file.Content) {
-		t.Fatalf("state hash mismatch: %q", got)
-	}
-	plan, _, err = PlanFiles([]RenderedFile{file}, ApplyOptions{KanonHome: kanonHome})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(plan.Changes) != 0 || len(plan.Conflicts) != 0 {
-		t.Fatalf("expected idempotent re-plan, got changes=%d conflicts=%d", len(plan.Changes), len(plan.Conflicts))
+	state := readTestFile(t, statePath)
+	if string(state) != "{not-json" {
+		t.Fatalf("old state file was rewritten: %q", state)
 	}
 }
 
-func TestApplyPrunesOrphanedManagedFiles(t *testing.T) {
+func TestApplyDoesNotCreateStateFile(t *testing.T) {
 	kanonHome := t.TempDir()
-	dest := t.TempDir()
-	keep := filepath.Join(dest, "keep.md")
-	drop := filepath.Join(dest, "drop.md")
-	files := []RenderedFile{
-		{Agent: AgentClaude, Path: keep, Content: []byte("keep\n"), Mode: 0o644, Prunable: true},
-		{Agent: AgentClaude, Path: drop, Content: []byte("drop\n"), Mode: 0o644, Prunable: true},
+	target := filepath.Join(t.TempDir(), "AGENTS.md")
+	file := RenderedFile{
+		Agent:   AgentCodex,
+		Path:    target,
+		Content: []byte("generated\n"),
+		Mode:    0o644,
 	}
-	opts := ApplyOptions{KanonHome: kanonHome, Agent: AgentAll}
-	applyAll(t, files, opts)
 
-	// Re-render without drop.md: it should be planned for deletion and removed.
-	plan, state, err := PlanFiles(files[:1], opts)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(plan.Changes) != 1 || plan.Changes[0].Action != "delete" || plan.Changes[0].Path != drop {
-		t.Fatalf("expected a single delete for %s, got %#v", drop, plan.Changes)
-	}
-	if err := ApplyFiles(plan, state, opts); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(drop); !os.IsNotExist(err) {
-		t.Fatalf("orphaned file was not pruned: %v", err)
-	}
-	if _, err := os.Stat(keep); err != nil {
-		t.Fatalf("kept file was removed: %v", err)
-	}
-	if _, ok := state.Files[drop]; ok {
-		t.Fatalf("pruned file still recorded in state")
+	applyAll(t, []RenderedFile{file}, ApplyOptions{KanonHome: kanonHome})
+
+	if _, err := os.Stat(oldStatePath(kanonHome)); !os.IsNotExist(err) {
+		t.Fatalf("apply created state file (err=%v)", err)
 	}
 }
 
-func TestApplyDoesNotPruneCoOwnedFiles(t *testing.T) {
+func TestApplyDoesNotPruneStoppedRenderingFiles(t *testing.T) {
 	kanonHome := t.TempDir()
 	dest := t.TempDir()
-	config := filepath.Join(dest, "settings.json")
+	root := filepath.Join(dest, "skills")
+	keep := filepath.Join(root, "keep", "SKILL.md")
+	drop := filepath.Join(root, "drop", "SKILL.md")
 	files := []RenderedFile{
-		{Agent: AgentClaude, Path: config, Content: []byte("{}\n"), Mode: 0o644, Prunable: false},
+		{Agent: AgentClaude, Path: keep, Content: []byte("keep\n"), Mode: 0o644},
+		{Agent: AgentClaude, Path: drop, Content: []byte("drop\n"), Mode: 0o644},
 	}
-	opts := ApplyOptions{KanonHome: kanonHome, Agent: AgentAll}
+	opts := ApplyOptions{KanonHome: kanonHome}
 	applyAll(t, files, opts)
 
-	// Render nothing: a non-prunable (co-owned) file must be left in place.
-	plan, _, err := PlanFiles(nil, opts)
+	plan, err := PlanFiles(files[:1], opts)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(plan.Changes) != 0 {
-		t.Fatalf("co-owned file should not be pruned, got %#v", plan.Changes)
+		t.Fatalf("stopped-rendering file should not be deleted, got %#v", plan.Changes)
 	}
-	if _, err := os.Stat(config); err != nil {
-		t.Fatalf("co-owned file was removed: %v", err)
+	if err := ApplyFiles(plan, opts); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(drop); err != nil {
+		t.Fatalf("stopped-rendering file was removed: %v", err)
 	}
 }
 
-func TestApplyPruneRespectsAgentScope(t *testing.T) {
+func TestCodexConfigMergePreservesExistingFieldsAndServers(t *testing.T) {
 	kanonHome := t.TempDir()
-	dest := t.TempDir()
-	codexFile := filepath.Join(dest, "codex.md")
-	claudeFile := filepath.Join(dest, "claude.md")
-	files := []RenderedFile{
-		{Agent: AgentCodex, Path: codexFile, Content: []byte("codex\n"), Mode: 0o644, Prunable: true},
-		{Agent: AgentClaude, Path: claudeFile, Content: []byte("claude\n"), Mode: 0o644, Prunable: true},
-	}
-	applyAll(t, files, ApplyOptions{KanonHome: kanonHome, Agent: AgentAll})
+	userHome := t.TempDir()
+	configPath := filepath.Join(userHome, ".codex", "config.toml")
+	writeTestFile(t, configPath, []byte(`
+approval_policy = "on-request"
 
-	// Apply scoped to claude with no claude files: the codex file is out of
-	// scope and must survive even though it is not rendered.
-	plan, state, err := PlanFiles(nil, ApplyOptions{KanonHome: kanonHome, Agent: AgentClaude})
+[mcp_servers.github]
+command = "old-github"
+
+[mcp_servers.private]
+command = "private-mcp"
+`))
+	cfg := &Config{
+		Version: 1,
+		MCP: MCPConfig{Servers: map[string]MCPServer{
+			"github": {Command: "github-mcp", Args: []string{"stdio"}, Targets: []string{AgentCodex}},
+		}},
+	}
+
+	files, err := RenderAll(cfg, TargetOptions{KanonHome: kanonHome, UserHome: userHome, Agent: AgentCodex})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(plan.Changes) != 1 || plan.Changes[0].Path != claudeFile {
-		t.Fatalf("expected only the claude file pruned, got %#v", plan.Changes)
-	}
-	if err := ApplyFiles(plan, state, ApplyOptions{KanonHome: kanonHome, Agent: AgentClaude}); err != nil {
+	plan, err := PlanFiles(files, ApplyOptions{KanonHome: kanonHome})
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(codexFile); err != nil {
-		t.Fatalf("out-of-scope codex file was pruned: %v", err)
+	if err := ApplyFiles(plan, ApplyOptions{KanonHome: kanonHome}); err != nil {
+		t.Fatal(err)
 	}
-	if _, err := os.Stat(claudeFile); !os.IsNotExist(err) {
-		t.Fatalf("in-scope claude file was not pruned: %v", err)
+	merged := string(readTestFile(t, configPath))
+	for _, want := range []string{"approval_policy", "on-request", "github-mcp", "private-mcp"} {
+		if !strings.Contains(merged, want) {
+			t.Fatalf("merged Codex config missing %q:\n%s", want, merged)
+		}
+	}
+	if strings.Contains(merged, "old-github") {
+		t.Fatalf("merged Codex config kept stale generated server value:\n%s", merged)
 	}
 }
 
-func TestApplyPruneRespectsProjectScope(t *testing.T) {
+func TestClaudeSettingsMergePreservesExistingFields(t *testing.T) {
 	kanonHome := t.TempDir()
-	projectA := t.TempDir()
-	projectB := t.TempDir()
-	fileA := filepath.Join(projectA, "AGENTS.md")
-	fileB := filepath.Join(projectB, "AGENTS.md")
-	applyAll(t, []RenderedFile{{Agent: AgentClaude, Path: fileA, Content: []byte("a\n"), Mode: 0o644, Prunable: true}},
-		ApplyOptions{KanonHome: kanonHome, Agent: AgentAll, Project: projectA})
-	applyAll(t, []RenderedFile{{Agent: AgentClaude, Path: fileB, Content: []byte("b\n"), Mode: 0o644, Prunable: true}},
-		ApplyOptions{KanonHome: kanonHome, Agent: AgentAll, Project: projectB})
+	userHome := t.TempDir()
+	settingsPath := filepath.Join(userHome, ".claude", "settings.json")
+	writeTestFile(t, settingsPath, []byte(`{"permissions":{"allow":["Read(**)"]},"theme":"dark","hooks":{"Old":[]}}`))
+	cfg := &Config{
+		Version: 1,
+		Hooks: []Hook{{
+			Name:    "fmt",
+			Targets: []string{AgentClaude},
+			Event:   "PostToolUse",
+			Matcher: "Write",
+			Command: "gofmt",
+		}},
+	}
 
-	// Apply scoped to projectA with nothing rendered: projectB's file is out of
-	// scope and must survive even though it is not rendered for this apply.
-	opts := ApplyOptions{KanonHome: kanonHome, Agent: AgentAll, Project: projectA}
-	plan, state, err := PlanFiles(nil, opts)
+	files, err := RenderAll(cfg, TargetOptions{KanonHome: kanonHome, UserHome: userHome, Agent: AgentClaude})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(plan.Changes) != 1 || plan.Changes[0].Path != fileA {
-		t.Fatalf("expected only projectA file pruned, got %#v", plan.Changes)
-	}
-	if err := ApplyFiles(plan, state, opts); err != nil {
+	plan, err := PlanFiles(files, ApplyOptions{KanonHome: kanonHome})
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(fileB); err != nil {
-		t.Fatalf("out-of-scope project file was pruned: %v", err)
+	if err := ApplyFiles(plan, ApplyOptions{KanonHome: kanonHome}); err != nil {
+		t.Fatal(err)
 	}
-	if _, err := os.Stat(fileA); !os.IsNotExist(err) {
-		t.Fatalf("in-scope project file was not pruned: %v", err)
+	var merged map[string]any
+	if err := json.Unmarshal(readTestFile(t, settingsPath), &merged); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := merged["permissions"]; !ok {
+		t.Fatalf("merged settings dropped permissions: %#v", merged)
+	}
+	if merged["theme"] != "dark" {
+		t.Fatalf("merged settings dropped theme: %#v", merged)
+	}
+	hooks := merged["hooks"].(map[string]any)
+	if _, ok := hooks["PostToolUse"]; !ok {
+		t.Fatalf("merged settings did not install rendered hooks: %#v", hooks)
+	}
+	if _, ok := hooks["Old"]; ok {
+		t.Fatalf("merged settings kept old hook section: %#v", hooks)
 	}
 }
 
-func TestApplyPruneGuardsExternallyModifiedFile(t *testing.T) {
+func TestClaudeSettingsMergeDoesNotHTMLEscapeShellRedirection(t *testing.T) {
 	kanonHome := t.TempDir()
-	dest := t.TempDir()
-	orphan := filepath.Join(dest, "AGENTS.md")
-	files := []RenderedFile{{Agent: AgentClaude, Path: orphan, Content: []byte("rendered\n"), Mode: 0o644, Prunable: true}}
-	opts := ApplyOptions{KanonHome: kanonHome, Agent: AgentAll}
-	applyAll(t, files, opts)
+	userHome := t.TempDir()
+	settingsPath := filepath.Join(userHome, ".claude", "settings.json")
+	writeTestFile(t, settingsPath, []byte(`{"theme":"dark"}`))
+	cfg := &Config{
+		Version: 1,
+		Hooks: []Hook{{
+			Name:    "notify",
+			Targets: []string{AgentClaude},
+			Event:   "Notification",
+			Command: "bash -c 'echo ok' 2>>/tmp/claude-log",
+		}},
+	}
 
-	// Edit the managed file outside kanon, then stop rendering it.
-	writeTestFile(t, orphan, []byte("hand edited\n"))
-
-	// Without --adopt the external change blocks the prune: it is a conflict and
-	// the file is left untouched.
-	plan, _, err := PlanFiles(nil, opts)
+	files, err := RenderAll(cfg, TargetOptions{KanonHome: kanonHome, UserHome: userHome, Agent: AgentClaude})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(plan.Conflicts) != 1 || plan.Conflicts[0].Path != orphan {
-		t.Fatalf("expected a prune conflict for %s, got conflicts=%#v changes=%#v", orphan, plan.Conflicts, plan.Changes)
+	plan, err := PlanFiles(files, ApplyOptions{KanonHome: kanonHome})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ApplyFiles(plan, ApplyOptions{KanonHome: kanonHome}); err != nil {
+		t.Fatal(err)
+	}
+	merged := string(readTestFile(t, settingsPath))
+	if !strings.Contains(merged, "2>>/tmp/claude-log") {
+		t.Fatalf("merged settings escaped shell redirection:\n%s", merged)
+	}
+	if strings.Contains(merged, `\u003e`) {
+		t.Fatalf("merged settings contains HTML escape:\n%s", merged)
+	}
+}
+
+func TestClaudeSettingsMergeSkipsSemanticallyEqualHooks(t *testing.T) {
+	kanonHome := t.TempDir()
+	userHome := t.TempDir()
+	settingsPath := filepath.Join(userHome, ".claude", "settings.json")
+	existing := `{
+  "theme": "dark",
+  "hooks": {
+    "Notification": [
+      {
+        "hooks": [
+          {
+            "command": "bash -c 'echo ok' 2>>/tmp/claude-log",
+            "type": "command"
+          }
+        ]
+      }
+    ]
+  }
+}
+`
+	writeTestFile(t, settingsPath, []byte(existing))
+	cfg := &Config{
+		Version: 1,
+		Hooks: []Hook{{
+			Name:    "notify",
+			Targets: []string{AgentClaude},
+			Event:   "Notification",
+			Command: "bash -c 'echo ok' 2>>/tmp/claude-log",
+		}},
+	}
+
+	files, err := RenderAll(cfg, TargetOptions{KanonHome: kanonHome, UserHome: userHome, Agent: AgentClaude})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := PlanFiles(files, ApplyOptions{KanonHome: kanonHome})
+	if err != nil {
+		t.Fatal(err)
 	}
 	if len(plan.Changes) != 0 {
-		t.Fatalf("externally modified orphan should not be deleted without --adopt, got %#v", plan.Changes)
-	}
-
-	// With --adopt the conflict becomes a delete and the file is removed.
-	adoptOpts := ApplyOptions{KanonHome: kanonHome, Agent: AgentAll, Adopt: true}
-	plan, state, err := PlanFiles(nil, adoptOpts)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(plan.Conflicts) != 0 || len(plan.Changes) != 1 || plan.Changes[0].Action != "delete" {
-		t.Fatalf("expected an adopted delete, got changes=%#v conflicts=%#v", plan.Changes, plan.Conflicts)
-	}
-	if err := ApplyFiles(plan, state, adoptOpts); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(orphan); !os.IsNotExist(err) {
-		t.Fatalf("adopted orphan was not pruned: %v", err)
+		t.Fatalf("semantically equal hooks should not produce a change: %#v", plan.Changes)
 	}
 }
 
-func TestApplyPruneRemovesEmptySkillDirectory(t *testing.T) {
+func TestClaudeMCPMergePreservesExistingFieldsAndServers(t *testing.T) {
 	kanonHome := t.TempDir()
-	dest := t.TempDir()
-	skillFile := filepath.Join(dest, "skills", "demo", "SKILL.md")
-	files := []RenderedFile{{Agent: AgentClaude, Path: skillFile, Content: []byte("skill\n"), Mode: 0o644, Prunable: true}}
-	opts := ApplyOptions{KanonHome: kanonHome, UserHome: dest, Agent: AgentAll}
-	applyAll(t, files, opts)
+	userHome := t.TempDir()
+	claudePath := filepath.Join(userHome, ".claude.json")
+	writeTestFile(t, claudePath, []byte(`{
+  "autoUpdates": false,
+  "mcpServers": {
+    "github": {"type":"stdio","command":"old-github"},
+    "private": {"type":"stdio","command":"private-mcp"}
+  }
+}`))
+	cfg := &Config{
+		Version: 1,
+		MCP: MCPConfig{Servers: map[string]MCPServer{
+			"github": {Command: "github-mcp", Targets: []string{AgentClaude}},
+		}},
+	}
 
-	// Re-render without the skill: its file is pruned and the now-empty
-	// skills/demo directory is cleaned up, leaving the destination root intact.
-	plan, state, err := PlanFiles(nil, opts)
+	files, err := RenderAll(cfg, TargetOptions{KanonHome: kanonHome, UserHome: userHome, Agent: AgentClaude})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := ApplyFiles(plan, state, opts); err != nil {
+	plan, err := PlanFiles(files, ApplyOptions{KanonHome: kanonHome})
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(dest, "skills", "demo")); !os.IsNotExist(err) {
-		t.Fatalf("empty skill directory was not removed: %v", err)
+	if err := ApplyFiles(plan, ApplyOptions{KanonHome: kanonHome}); err != nil {
+		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(dest, "skills")); !os.IsNotExist(err) {
-		t.Fatalf("empty skills parent directory was not removed: %v", err)
+	var merged map[string]any
+	if err := json.Unmarshal(readTestFile(t, claudePath), &merged); err != nil {
+		t.Fatal(err)
 	}
-	if _, err := os.Stat(dest); err != nil {
-		t.Fatalf("protected destination root was removed: %v", err)
+	if merged["autoUpdates"] != false {
+		t.Fatalf("merged Claude config dropped autoUpdates: %#v", merged)
+	}
+	servers := merged["mcpServers"].(map[string]any)
+	if _, ok := servers["private"]; !ok {
+		t.Fatalf("merged Claude config dropped private server: %#v", servers)
+	}
+	github := servers["github"].(map[string]any)
+	if github["command"] != "github-mcp" {
+		t.Fatalf("merged Claude config did not replace github server: %#v", github)
+	}
+}
+
+func TestCoOwnedConfigMergeRejectsInvalidExistingFile(t *testing.T) {
+	kanonHome := t.TempDir()
+	userHome := t.TempDir()
+	configPath := filepath.Join(userHome, ".codex", "config.toml")
+	writeTestFile(t, configPath, []byte("mcp_servers = [\n"))
+	cfg := &Config{
+		Version: 1,
+		MCP: MCPConfig{Servers: map[string]MCPServer{
+			"github": {Command: "github-mcp", Targets: []string{AgentCodex}},
+		}},
+	}
+
+	files, err := RenderAll(cfg, TargetOptions{KanonHome: kanonHome, UserHome: userHome, Agent: AgentCodex})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = PlanFiles(files, ApplyOptions{KanonHome: kanonHome})
+	if err == nil || !strings.Contains(err.Error(), "cannot parse") {
+		t.Fatalf("expected parse error for invalid existing config, got %v", err)
+	}
+	if string(readTestFile(t, configPath)) != "mcp_servers = [\n" {
+		t.Fatalf("invalid config was modified")
 	}
 }
 
 func applyAll(t *testing.T, files []RenderedFile, opts ApplyOptions) {
 	t.Helper()
-	plan, state, err := PlanFiles(files, opts)
+	plan, err := PlanFiles(files, opts)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := ApplyFiles(plan, state, opts); err != nil {
+	if err := ApplyFiles(plan, opts); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func oldStatePath(home string) string {
+	return filepath.Join(home, ".kanon", "state.json")
 }

@@ -136,7 +136,7 @@ func diffCommand(opts *options) *cobra.Command {
 		Use:   "diff",
 		Short: "Diff the target state against files on disk (destination)",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			plan, _, err := opts.plan(false)
+			plan, err := opts.plan()
 			if err != nil {
 				return err
 			}
@@ -155,7 +155,7 @@ func applyCommand(opts *options) *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&opts.yes, "yes", false, "apply without prompting")
-	cmd.Flags().BoolVar(&opts.adopt, "adopt", false, "overwrite unmanaged or externally changed files")
+	cmd.Flags().BoolVar(&opts.adopt, "adopt", false, "deprecated; has no effect")
 	cmd.Flags().BoolVarP(&opts.dryRun, "dry-run", "n", false, "show what apply would change without writing")
 	return cmd
 }
@@ -178,7 +178,7 @@ func statusCommand(opts *options) *cobra.Command {
 			} else {
 				fmt.Fprintf(cmd.ErrOrStderr(), "Git status unavailable: %v\n", err)
 			}
-			plan, _, err := opts.plan(false)
+			plan, err := opts.plan()
 			if err != nil {
 				if isMissingConfigError(home, opts.configPath, err) {
 					return nil
@@ -250,7 +250,7 @@ func updateCommand(opts *options) *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&opts.yes, "yes", false, "apply without prompting")
-	cmd.Flags().BoolVar(&opts.adopt, "adopt", false, "overwrite unmanaged or externally changed files")
+	cmd.Flags().BoolVar(&opts.adopt, "adopt", false, "deprecated; has no effect")
 	cmd.Flags().BoolVarP(&opts.dryRun, "dry-run", "n", false, "pull, then show what apply would change without writing")
 	return cmd
 }
@@ -291,19 +291,19 @@ func (opts *options) render() ([]core.RenderedFile, string, error) {
 	return files, home, nil
 }
 
-func (opts *options) plan(adopt bool) (*core.ApplyPlan, *core.State, error) {
+func (opts *options) plan() (*core.ApplyPlan, error) {
 	files, home, err := opts.render()
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	target, err := opts.targetOptions()
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	return core.PlanFiles(files, core.ApplyOptions{
 		KanonHome: home,
 		UserHome:  target.UserHome,
-		Adopt:     adopt,
+		Adopt:     opts.adopt,
 		Agent:     target.Agent,
 		Project:   target.Project,
 	})
@@ -313,13 +313,13 @@ func (opts *options) plan(adopt bool) (*core.ApplyPlan, *core.State, error) {
 // changes. When confirmFirst is true it shows the diff and prompts before
 // writing. It is shared by the apply and update commands.
 func (opts *options) runApply(cmd *cobra.Command, confirmFirst bool) error {
-	plan, state, err := opts.plan(opts.adopt)
+	plan, err := opts.plan()
 	if err != nil {
 		return err
 	}
 	if len(plan.Conflicts) > 0 {
 		fmt.Fprint(cmd.OutOrStdout(), core.FormatPlanDiff(plan))
-		return errors.New("resolve conflicts or pass --adopt")
+		return errors.New("resolve conflicts")
 	}
 	if len(plan.Changes) == 0 {
 		fmt.Fprintln(cmd.OutOrStdout(), "No changes.")
@@ -349,7 +349,7 @@ func (opts *options) runApply(cmd *cobra.Command, confirmFirst bool) error {
 	if err != nil {
 		return err
 	}
-	if err := core.ApplyFiles(plan, state, core.ApplyOptions{
+	if err := core.ApplyFiles(plan, core.ApplyOptions{
 		KanonHome: home,
 		UserHome:  target.UserHome,
 		Adopt:     opts.adopt,

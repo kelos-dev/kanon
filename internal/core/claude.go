@@ -8,22 +8,20 @@ import (
 
 type claudeAdapter struct{}
 
+type claudeDestination struct {
+	targetRoot      string
+	instructionPath string
+	mcpPath         string
+	skillRoot       string
+}
+
 func (claudeAdapter) Name() string {
 	return AgentClaude
 }
 
 func (claudeAdapter) Render(cfg *Config, opts TargetOptions) ([]RenderedFile, error) {
 	var files []RenderedFile
-	targetRoot := filepath.Join(opts.UserHome, ".claude")
-	instructionPath := filepath.Join(targetRoot, "CLAUDE.md")
-	mcpPath := filepath.Join(opts.UserHome, ".claude.json")
-	skillRoot := filepath.Join(targetRoot, "skills")
-	if opts.Project != "" {
-		targetRoot = filepath.Join(opts.Project, ".claude")
-		instructionPath = filepath.Join(opts.Project, "CLAUDE.md")
-		mcpPath = filepath.Join(opts.Project, ".mcp.json")
-		skillRoot = filepath.Join(targetRoot, "skills")
-	}
+	dest := claudeDestinationFor(opts)
 
 	instructions, err := readInstruction(opts.KanonHome, cfg.Instructions.Files)
 	if err != nil {
@@ -31,11 +29,10 @@ func (claudeAdapter) Render(cfg *Config, opts TargetOptions) ([]RenderedFile, er
 	}
 	if len(instructions) > 0 {
 		files = append(files, RenderedFile{
-			Agent:    AgentClaude,
-			Path:     instructionPath,
-			Content:  instructions,
-			Mode:     0o644,
-			Prunable: true,
+			Agent:   AgentClaude,
+			Path:    dest.instructionPath,
+			Content: instructions,
+			Mode:    0o644,
 		})
 	}
 
@@ -50,9 +47,10 @@ func (claudeAdapter) Render(cfg *Config, opts TargetOptions) ([]RenderedFile, er
 		}
 		files = append(files, RenderedFile{
 			Agent:   AgentClaude,
-			Path:    filepath.Join(targetRoot, "settings.json"),
+			Path:    filepath.Join(dest.targetRoot, "settings.json"),
 			Content: data,
 			Mode:    0o644,
+			Merge:   FileMergeClaudeSettings,
 		})
 	}
 
@@ -67,13 +65,14 @@ func (claudeAdapter) Render(cfg *Config, opts TargetOptions) ([]RenderedFile, er
 		}
 		files = append(files, RenderedFile{
 			Agent:   AgentClaude,
-			Path:    mcpPath,
+			Path:    dest.mcpPath,
 			Content: data,
 			Mode:    0o644,
+			Merge:   FileMergeClaudeMCP,
 		})
 	}
 
-	skills, err := renderSkills(cfg, opts, AgentClaude, skillRoot)
+	skills, err := renderSkills(cfg, opts, AgentClaude, dest.skillRoot)
 	if err != nil {
 		return nil, err
 	}
@@ -126,4 +125,20 @@ func (claudeAdapter) Import(opts ImportOptions) (*ImportResult, error) {
 		return nil, err
 	}
 	return result, nil
+}
+
+func claudeDestinationFor(opts TargetOptions) claudeDestination {
+	dest := claudeDestination{
+		targetRoot:      filepath.Join(opts.UserHome, ".claude"),
+		instructionPath: filepath.Join(opts.UserHome, ".claude", "CLAUDE.md"),
+		mcpPath:         filepath.Join(opts.UserHome, ".claude.json"),
+		skillRoot:       filepath.Join(opts.UserHome, ".claude", "skills"),
+	}
+	if opts.Project != "" {
+		dest.targetRoot = filepath.Join(opts.Project, ".claude")
+		dest.instructionPath = filepath.Join(opts.Project, "CLAUDE.md")
+		dest.mcpPath = filepath.Join(opts.Project, ".mcp.json")
+		dest.skillRoot = filepath.Join(opts.Project, ".claude", "skills")
+	}
+	return dest
 }
