@@ -17,6 +17,7 @@ type keyMap struct {
 	Push       key.Binding
 	Filter     key.Binding
 	DryRun     key.Binding
+	Mode       key.Binding
 	Help       key.Binding
 	Quit       key.Binding
 }
@@ -37,6 +38,7 @@ func defaultKeys() keyMap {
 		Push:       key.NewBinding(key.WithKeys("P")),
 		Filter:     key.NewBinding(key.WithKeys("/")),
 		DryRun:     key.NewBinding(key.WithKeys("t")),
+		Mode:       key.NewBinding(key.WithKeys("m")),
 		Help:       key.NewBinding(key.WithKeys("?")),
 		Quit:       key.NewBinding(key.WithKeys("q", "ctrl+c")),
 	}

@@ -23,6 +23,8 @@ type options struct {
 	dryRun            bool
 	force             bool
 	write             bool
+	ui                bool
+	uiMode            string
 	gitInit           bool
 	secretPolicy      string
 	instructionPolicy string
@@ -198,6 +200,12 @@ func importCommand(opts *options) *cobra.Command {
 		Aliases: []string{"add"},
 		Short:   "Capture existing agent files into the source state",
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if opts.ui {
+				if opts.write {
+					return errors.New("use only one of --ui or --write")
+				}
+				return opts.runUI(cmd, "import")
+			}
 			target, err := opts.targetOptions()
 			if err != nil {
 				return err
@@ -228,6 +236,7 @@ func importCommand(opts *options) *cobra.Command {
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&opts.ui, "ui", false, "review and select imports in the interactive TUI")
 	cmd.Flags().BoolVar(&opts.write, "write", false, "write imported config and files into the Kanon home")
 	cmd.Flags().BoolVar(&opts.force, "force", false, "overwrite an existing kanon.yaml during import")
 	cmd.Flags().StringVar(&opts.secretPolicy, "secret-policy", string(core.SecretPolicyKeep), "secret handling during import: keep")

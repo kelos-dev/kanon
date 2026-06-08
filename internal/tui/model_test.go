@@ -281,6 +281,38 @@ func TestFocusCycles(t *testing.T) {
 	}
 }
 
+func TestModeSwitchLoadsImportPlan(t *testing.T) {
+	importPlan := &core.ApplyPlan{Changes: []core.FileChange{{
+		Agent:  "codex",
+		Path:   "/home/u/.config/kanon/skills/review/SKILL.md",
+		Action: "create",
+		File:   core.RenderedFile{Content: []byte("kind: skill\n")},
+	}}}
+	m := newTestModel(t, testPlan())
+	m.deps.ImportPlan = func() (*core.ApplyPlan, error) { return importPlan, nil }
+	m.deps.ImportSelected = func(map[string]SelectedChange, bool) (int, error) { return 1, nil }
+
+	m, cmd := updateCmd(m, keyMsg("m"))
+	if cmd == nil {
+		t.Fatalf("mode switch must load the import plan")
+	}
+	if m.mode != ModeImport {
+		t.Fatalf("expected import mode, got %s", m.mode)
+	}
+	msg := cmd()
+	loaded, ok := msg.(planLoadedMsg)
+	if !ok {
+		t.Fatalf("expected planLoadedMsg, got %T", msg)
+	}
+	m = update(m, loaded)
+	if m.plan != importPlan {
+		t.Fatalf("expected import plan to be loaded")
+	}
+	if !strings.Contains(m.View(), "Import Changes") {
+		t.Fatalf("expected import mode title in view")
+	}
+}
+
 func TestDiffShortcutFocusesDiffPane(t *testing.T) {
 	m := newTestModel(t, testPlan())
 	m = update(m, keyMsg("d"))

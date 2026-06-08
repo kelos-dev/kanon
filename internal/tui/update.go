@@ -25,12 +25,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case appliedMsg:
 		m.state = stateLoading
-		m.status = fmt.Sprintf("Applied %d file change(s).", msg.count)
+		m.status = fmt.Sprintf("%s %d change(s).", m.doneVerb(), msg.count)
 		return m, tea.Batch(m.loadPlanCmd(), m.loadGitStatusCmd())
 
 	case dryRunCheckedMsg:
 		m.state = stateReady
-		m.status = fmt.Sprintf("DRY-RUN: would apply %d file change(s).", msg.count)
+		m.status = fmt.Sprintf("DRY-RUN: would %s %d change(s).", m.actionVerb(), msg.count)
 		return m, nil
 
 	case gitDoneMsg:
@@ -134,6 +134,9 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.dryRun = !m.dryRun
 		return m, nil
 
+	case key.Matches(msg, m.keys.Mode):
+		return m.switchMode()
+
 	case key.Matches(msg, m.keys.Apply):
 		return m.apply()
 
@@ -218,14 +221,61 @@ func (m Model) apply() (tea.Model, tea.Cmd) {
 		m.status = "Nothing selected."
 		return m, nil
 	}
+	if m.writeFunc() == nil {
+		m.status = fmt.Sprintf("%s mode is not configured.", m.mode)
+		return m, nil
+	}
 	if m.dryRun {
 		m.state = stateApplying
 		m.status = "Checking dry run…"
 		return m, m.applyCmd(m.selectedChanges(), true)
 	}
 	m.state = stateApplying
-	m.status = "Applying…"
+	m.status = m.activeVerb() + "…"
 	return m, m.applyCmd(m.selectedChanges(), false)
+}
+
+func (m Model) switchMode() (tea.Model, tea.Cmd) {
+	if m.deps.ImportPlan == nil || m.deps.ImportSelected == nil {
+		m.status = "Import mode is not configured."
+		return m, nil
+	}
+	if m.mode == ModeImport {
+		m.mode = ModeApply
+	} else {
+		m.mode = ModeImport
+	}
+	m.state = stateLoading
+	m.status = ""
+	m.cursor = 0
+	m.selected = map[string]bool{}
+	m.diffCache = map[string]string{}
+	m.filter = ""
+	m.filtering = false
+	m.filterInput.Blur()
+	m.filterInput.SetValue("")
+	return m, m.loadPlanCmd()
+}
+
+func (m Model) activeVerb() string {
+	if m.mode == ModeImport {
+		return "Importing"
+	}
+	return "Applying"
+}
+
+func (m Model) doneVerb() string {
+	if m.mode == ModeImport {
+		return "Imported"
+	}
+	return "Applied"
+}
+
+func (m Model) actionVerb() string {
+	if m.mode == ModeImport {
+		return "import"
+	}
+	return "apply"
 }
 
 func (m *Model) setAllSelected(v bool) {
