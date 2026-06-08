@@ -87,16 +87,20 @@ make build
 
 ```sh
 kanon init        # scaffold the source repo
+kanon import --ui # review and import existing destination settings
 kanon render      # inspect the target state
 kanon diff        # preview changes against disk
 kanon apply       # write the changes
 kanon ui          # interactively review and apply selected changes
-kanon import --ui # interactively review and import selected destination settings
 ```
 
 The source repository defaults to `~/.config/kanon`; set `KANON_HOME` or pass
 `--home` to point elsewhere. On another machine, `kanon update` pulls and applies
 in one step; use `kanon pull` / `kanon push` for explicit git sync.
+
+If this machine already has Codex or Claude settings, start with
+`kanon import --ui`. It lets you review discovered instructions, skills, MCP
+servers, and hooks one item at a time before adding them to the Kanon source.
 
 ## Example repository
 
@@ -152,7 +156,7 @@ cannot be parsed, the merge stops with an error and the file is left untouched.
 ## Importing existing settings
 
 ```sh
-kanon import --agent all
+kanon import --ui
 kanon import --agent all --ui
 kanon import --agent all --write
 kanon import --agent all --write --force
@@ -160,10 +164,14 @@ kanon import --agent all --write --force
 
 `import` runs the pipeline in reverse: it reads existing Codex and Claude files
 (the destination state) and normalizes them back into the neutral source state.
-Use `--ui` to review discovered instructions, skills, MCP servers, and hooks as
-selectable import units before writing them into the source. The same import
-review is available from `kanon ui`; press `m` to switch between apply and
-import modes, or start there with `kanon ui --mode import`.
+For interactive use, prefer `kanon import --ui`: it reviews discovered
+instructions, skills, MCP servers, and hooks as selectable import units before
+writing them into the source. The same import review is available from
+`kanon ui`; press `m` to switch between apply and import modes, or start there
+with `kanon ui --mode import`.
+
+Use `--write` for scripted imports that should write the full normalized result
+without interactive review.
 
 Imported config is neutral by default: instructions, skills, MCP servers, and
 hooks are lifted into top-level sections with optional `targets` when a setting
