@@ -65,6 +65,24 @@ Every command is an arrow between two states:
 | `ui` | target ↔ destination | Review, select, and apply changes in an interactive TUI |
 | `pull` / `push` | source ↔ remote | Sync the source with a git remote |
 
+## Installation
+
+Install with Go:
+
+```sh
+go install github.com/kelos-dev/kanon@latest
+```
+
+`go install` writes the `kanon` binary to `$(go env GOPATH)/bin`, or to
+`GOBIN` when it is set. Make sure that directory is on your `PATH`.
+
+From a local checkout, build the command into `./bin/kanon`:
+
+```sh
+make build
+./bin/kanon --help
+```
+
 ## Quick start
 
 ```sh
