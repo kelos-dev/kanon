@@ -97,6 +97,13 @@ The source repository defaults to `~/.config/kanon`; set `KANON_HOME` or pass
 `--home` to point elsewhere. On another machine, `kanon update` pulls and applies
 in one step; use `kanon pull` / `kanon push` for explicit git sync.
 
+## Example repository
+
+For a concrete Kanon source layout, see
+[github.com/gjkim42/kanon-repo](https://github.com/gjkim42/kanon-repo). It shows
+how `kanon.yaml`, instructions, skills, and other source assets can be organized
+in a repository that is shared across machines.
+
 ## Rendered settings
 
 From the source state, Kanon renders:
