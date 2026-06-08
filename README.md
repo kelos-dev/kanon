@@ -86,11 +86,12 @@ make build
 ## Quick start
 
 ```sh
-kanon init     # scaffold the source repo
-kanon render   # inspect the target state
-kanon diff     # preview changes against disk
-kanon apply    # write the changes
-kanon ui       # interactively review and apply selected changes
+kanon init        # scaffold the source repo
+kanon render      # inspect the target state
+kanon diff        # preview changes against disk
+kanon apply       # write the changes
+kanon ui          # interactively review and apply selected changes
+kanon import --ui # interactively review and import selected destination settings
 ```
 
 The source repository defaults to `~/.config/kanon`; set `KANON_HOME` or pass
@@ -145,12 +146,18 @@ cannot be parsed, the merge stops with an error and the file is left untouched.
 
 ```sh
 kanon import --agent all
+kanon import --agent all --ui
 kanon import --agent all --write
 kanon import --agent all --write --force
 ```
 
 `import` runs the pipeline in reverse: it reads existing Codex and Claude files
 (the destination state) and normalizes them back into the neutral source state.
+Use `--ui` to review discovered instructions, skills, MCP servers, and hooks as
+selectable import units before writing them into the source. The same import
+review is available from `kanon ui`; press `m` to switch between apply and
+import modes, or start there with `kanon ui --mode import`.
+
 Imported config is neutral by default: instructions, skills, MCP servers, and
 hooks are lifted into top-level sections with optional `targets` when a setting
 only applies to some agents. Native fields that do not map to the neutral schema

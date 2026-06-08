@@ -27,7 +27,7 @@ func (m Model) View() string {
 	l := m.computeLayout()
 
 	left := lipgloss.JoinVertical(lipgloss.Left,
-		m.panel("Agents", m.renderAgents(), l.leftW, l.topH, m.focus == focusAgents),
+		m.panel("Mode / Agents", m.renderAgents(), l.leftW, l.topH, m.focus == focusAgents),
 		m.panel("Source", m.renderSource(), l.leftW, l.bottomH, false),
 	)
 	right := lipgloss.JoinVertical(lipgloss.Left,
@@ -50,9 +50,9 @@ func (m Model) panel(title, body string, width, height int, focused bool) string
 
 func (m Model) changesTitle() string {
 	if m.plan == nil {
-		return "Changes"
+		return m.modeTitle() + " Changes"
 	}
-	return fmt.Sprintf("Changes (%d changed · %d conflict · %d selected)",
+	return fmt.Sprintf("%s Changes (%d changed · %d conflict · %d selected)", m.modeTitle(),
 		len(m.plan.Changes), len(m.plan.Conflicts), m.selectedCount())
 }
 
@@ -64,6 +64,9 @@ func (m Model) renderAgents() string {
 		}
 	}
 	var b strings.Builder
+	b.WriteString(m.styles.AgentActive.Render("mode: " + string(m.mode)))
+	b.WriteByte('\n')
+	b.WriteByte('\n')
 	for _, a := range []string{core.AgentClaude, core.AgentCodex} {
 		active := m.deps.Agent == core.AgentAll || m.deps.Agent == a
 		label := fmt.Sprintf("%s (%d)", a, counts[a])
@@ -179,7 +182,7 @@ func (m Model) statusLineView() string {
 	case stateLoading:
 		left = "Loading…"
 	case stateApplying:
-		left = "Applying…"
+		left = m.activeVerb() + "…"
 	case stateGitRunning:
 		left = "Running git…"
 	case stateError:
@@ -212,12 +215,23 @@ func (m Model) hintView() string {
 	if m.filtering {
 		return m.styles.HintBar.Width(m.width).Render(m.filterInput.View())
 	}
-	hint := "[a]pply [space]toggle [A]ll [N]one [d]iff [r]eload [p]ull [P]push [/]filter [q]uit"
+	action := "apply"
+	if m.mode == ModeImport {
+		action = "import"
+	}
+	hint := fmt.Sprintf("[a]%s [m]ode [space]toggle [A]ll [N]one [d]iff [r]eload [p]ull [P]push [/]filter [q]uit", action)
 	if m.showHelp {
-		hint = "↑/k up · ↓/j down · tab focus · space toggle · A all · N none · t dry-run · " +
+		hint = "↑/k up · ↓/j down · tab focus · m mode · space toggle · A all · N none · t dry-run · " +
 			"d diff · a apply · r reload · p pull · P push · / filter · q quit"
 	}
 	return m.styles.HintBar.Width(m.width).Render(truncate(hint, m.width))
+}
+
+func (m Model) modeTitle() string {
+	if m.mode == ModeImport {
+		return "Import"
+	}
+	return "Apply"
 }
 
 func firstLine(s string) string {

@@ -61,6 +61,7 @@ type Model struct {
 	status   string
 	showHelp bool
 	dryRun   bool
+	mode     Mode
 
 	gitStatus string
 
@@ -84,6 +85,10 @@ func New(deps Deps) Model {
 	ti := textinput.New()
 	ti.Prompt = "/"
 	ti.Placeholder = "filter by path"
+	mode := deps.Mode
+	if mode == "" {
+		mode = ModeApply
+	}
 	return Model{
 		deps:        deps,
 		keys:        defaultKeys(),
@@ -91,6 +96,7 @@ func New(deps Deps) Model {
 		focus:       focusChanges,
 		state:       stateLoading,
 		dryRun:      deps.DryRun,
+		mode:        mode,
 		selected:    map[string]bool{},
 		diffCache:   map[string]string{},
 		viewport:    viewport.New(0, 0),
@@ -105,7 +111,7 @@ func (m Model) Init() tea.Cmd {
 // --- command factories: every core call runs off the Update loop ---
 
 func (m Model) loadPlanCmd() tea.Cmd {
-	plan := m.deps.Plan
+	plan := m.planFunc()
 	return func() tea.Msg {
 		p, err := plan()
 		if err != nil {
@@ -131,7 +137,7 @@ func (m Model) loadGitStatusCmd() tea.Cmd {
 }
 
 func (m Model) applyCmd(selected map[string]SelectedChange, dryRun bool) tea.Cmd {
-	apply := m.deps.ApplySelected
+	apply := m.writeFunc()
 	return func() tea.Msg {
 		count, err := apply(selected, dryRun)
 		if err != nil {
@@ -142,6 +148,20 @@ func (m Model) applyCmd(selected map[string]SelectedChange, dryRun bool) tea.Cmd
 		}
 		return appliedMsg{count: count}
 	}
+}
+
+func (m Model) planFunc() func() (*core.ApplyPlan, error) {
+	if m.mode == ModeImport && m.deps.ImportPlan != nil {
+		return m.deps.ImportPlan
+	}
+	return m.deps.Plan
+}
+
+func (m Model) writeFunc() func(map[string]SelectedChange, bool) (int, error) {
+	if m.mode == ModeImport && m.deps.ImportSelected != nil {
+		return m.deps.ImportSelected
+	}
+	return m.deps.ApplySelected
 }
 
 func (m Model) gitCmd(label string, args ...string) tea.Cmd {

@@ -2,6 +2,13 @@ package tui
 
 import "github.com/kelos-dev/kanon/internal/core"
 
+type Mode string
+
+const (
+	ModeApply  Mode = "apply"
+	ModeImport Mode = "import"
+)
+
 type SelectedChange struct {
 	Path         string
 	Action       string
@@ -19,6 +26,7 @@ type Deps struct {
 	Agent    string // "all", "codex", or "claude"
 	Project  string
 	DryRun   bool
+	Mode     Mode
 
 	// Plan renders the source and plans it against the destination.
 	Plan func() (*core.ApplyPlan, error)
@@ -26,6 +34,14 @@ type Deps struct {
 	// ApplySelected validates the currently selected paths against a fresh plan
 	// before writing them. dryRun returns the validated count without writing.
 	ApplySelected func(selected map[string]SelectedChange, dryRun bool) (int, error)
+
+	// ImportPlan reads destination state and plans selectable imports into the
+	// Kanon source.
+	ImportPlan func() (*core.ApplyPlan, error)
+
+	// ImportSelected validates selected import units against a fresh import plan
+	// before merging them into the source.
+	ImportSelected func(selected map[string]SelectedChange, dryRun bool) (int, error)
 
 	// GitStatus returns `git status --short` output for the source repo.
 	GitStatus func() ([]byte, error)

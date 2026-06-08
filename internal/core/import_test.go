@@ -1,6 +1,7 @@
 package core
 
 import (
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -201,6 +202,76 @@ func TestImportSkillsIntoNeutralTargets(t *testing.T) {
 	}
 	if string(result.Files[filepath.Join("skills", "review", "SKILL.md")]) != string(skill) {
 		t.Fatalf("skill file was not imported: %#v", result.Files)
+	}
+}
+
+func TestWriteSelectedImportImportsOnlySelectedSkill(t *testing.T) {
+	kanonHome := t.TempDir()
+	userHome := t.TempDir()
+	reviewSkill := []byte("---\nname: review\n---\n\nReview code.\n")
+	lintSkill := []byte("---\nname: lint\n---\n\nLint code.\n")
+	writeTestFile(t, filepath.Join(userHome, ".agents", "skills", "review", "SKILL.md"), reviewSkill)
+	writeTestFile(t, filepath.Join(userHome, ".agents", "skills", "lint", "SKILL.md"), lintSkill)
+
+	plan, err := PlanImport(ImportOptions{
+		TargetOptions: TargetOptions{
+			KanonHome: kanonHome,
+			UserHome:  userHome,
+			Agent:     AgentCodex,
+		},
+		InstructionPolicy: InstructionPolicySkip,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.ApplyPlan.Changes) != 2 {
+		t.Fatalf("expected two skill import changes, got %#v", plan.ApplyPlan.Changes)
+	}
+	reviewPath := filepath.Join(kanonHome, "skills", "review", "SKILL.md")
+	if err := WriteSelectedImport(plan, map[string]bool{reviewPath: true}, kanonHome); err != nil {
+		t.Fatal(err)
+	}
+	cfg, _, err := LoadConfig(kanonHome, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Skills) != 1 || cfg.Skills[0].Name != "review" || !slices.Contains(cfg.Skills[0].Targets, AgentCodex) {
+		t.Fatalf("expected only selected review skill in config, got %#v", cfg.Skills)
+	}
+	if data, err := os.ReadFile(reviewPath); err != nil || string(data) != string(reviewSkill) {
+		t.Fatalf("selected skill file was not written correctly: %q, %v", data, err)
+	}
+	if _, err := os.Stat(filepath.Join(kanonHome, "skills", "lint", "SKILL.md")); !os.IsNotExist(err) {
+		t.Fatalf("unselected lint skill should not be written, stat err: %v", err)
+	}
+}
+
+func TestPlanImportTreatsExistingAllTargetSkillAsCovered(t *testing.T) {
+	kanonHome := t.TempDir()
+	userHome := t.TempDir()
+	skill := []byte("---\nname: review\n---\n\nReview code.\n")
+	writeTestFile(t, filepath.Join(kanonHome, "skills", "review", "SKILL.md"), skill)
+	writeTestFile(t, filepath.Join(userHome, ".agents", "skills", "review", "SKILL.md"), skill)
+	if err := WriteConfig(filepath.Join(kanonHome, "kanon.yaml"), &Config{
+		Version: 1,
+		Skills:  []Skill{{Name: "review"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	plan, err := PlanImport(ImportOptions{
+		TargetOptions: TargetOptions{
+			KanonHome: kanonHome,
+			UserHome:  userHome,
+			Agent:     AgentCodex,
+		},
+		InstructionPolicy: InstructionPolicySkip,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.ApplyPlan.Changes) != 0 {
+		t.Fatalf("expected all-target existing skill to cover codex import, got %#v", plan.ApplyPlan.Changes)
 	}
 }
 
