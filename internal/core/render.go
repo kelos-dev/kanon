@@ -15,7 +15,7 @@ import (
 
 func RenderAll(cfg *Config, opts TargetOptions) ([]RenderedFile, error) {
 	var files []RenderedFile
-	for _, adapter := range adaptersFor(opts.Agent) {
+	for _, adapter := range adaptersFor(cfg, opts.Agent) {
 		rendered, err := adapter.Render(cfg, opts)
 		if err != nil {
 			return nil, err
@@ -52,15 +52,49 @@ func FormatRender(files []RenderedFile) string {
 	return out.String()
 }
 
-func adaptersFor(agent string) []Adapter {
-	switch agent {
-	case AgentCodex:
-		return []Adapter{codexAdapter{}}
-	case AgentClaude:
-		return []Adapter{claudeAdapter{}}
-	default:
-		return []Adapter{codexAdapter{}, claudeAdapter{}}
+// allAdapters is the registry of every adapter Kanon knows how to render.
+func allAdapters() []Adapter {
+	return []Adapter{codexAdapter{}, claudeAdapter{}, geminiAdapter{}}
+}
+
+// defaultAgents is the set rendered when a config does not opt in via the
+// top-level agents: key. It stays codex+claude so that existing kanon.yaml
+// files keep rendering exactly those two and never start writing files for a
+// newly added adapter on the next apply.
+var defaultAgents = []string{AgentCodex, AgentClaude}
+
+func adapterByName(name string) Adapter {
+	for _, adapter := range allAdapters() {
+		if adapter.Name() == name {
+			return adapter
+		}
 	}
+	return nil
+}
+
+// adaptersFor resolves which adapters to run. A specific --agent selects just
+// that adapter; "all" intersects the registry with the config's enabled agent
+// list (cfg.Agents), defaulting to codex+claude when that list is absent. A
+// nil config (e.g. during import, before a kanon.yaml exists) uses the default
+// set as well, preserving the prior import behavior.
+func adaptersFor(cfg *Config, agent string) []Adapter {
+	if agent != AgentAll {
+		if adapter := adapterByName(agent); adapter != nil {
+			return []Adapter{adapter}
+		}
+		return nil
+	}
+	names := defaultAgents
+	if cfg != nil && len(cfg.Agents) > 0 {
+		names = cfg.Agents
+	}
+	var adapters []Adapter
+	for _, name := range names {
+		if adapter := adapterByName(name); adapter != nil {
+			adapters = append(adapters, adapter)
+		}
+	}
+	return adapters
 }
 
 func readInstruction(home string, paths []string) ([]byte, error) {
@@ -330,6 +364,58 @@ func claudeMCPServers(cfg *Config) map[string]any {
 		}
 		if server.StartupTimeoutSec > 0 {
 			item["timeout"] = server.StartupTimeoutSec
+		}
+		out[name] = item
+	}
+	return out
+}
+
+func geminiMCPServers(cfg *Config) map[string]any {
+	out := map[string]any{}
+	names := sortedMCPNames(cfg)
+	for _, name := range names {
+		server := cfg.MCP.Servers[name]
+		if !enabled(server.Enabled) || !HasTarget(server.Targets, AgentGemini) {
+			continue
+		}
+		item := map[string]any{}
+		if server.Command != "" {
+			item["command"] = server.Command
+		}
+		if len(server.Args) > 0 {
+			item["args"] = server.Args
+		}
+		if len(server.Env) > 0 {
+			item["env"] = server.Env
+		}
+		if server.URL != "" {
+			// Gemini CLI distinguishes streamable HTTP (httpUrl) from SSE (url).
+			if server.Type == "sse" {
+				item["url"] = server.URL
+			} else {
+				item["httpUrl"] = server.URL
+			}
+		}
+		if len(server.Headers) > 0 {
+			item["headers"] = server.Headers
+		}
+		if len(server.EnvHeaders) > 0 {
+			headers := map[string]string{}
+			if existing, ok := item["headers"].(map[string]string); ok {
+				for key, value := range existing {
+					headers[key] = value
+				}
+			}
+			for key, value := range server.EnvHeaders {
+				headers[key] = fmt.Sprintf("${%s}", value)
+			}
+			item["headers"] = headers
+		}
+		if len(server.EnabledTools) > 0 {
+			item["includeTools"] = server.EnabledTools
+		}
+		if len(server.DisabledTools) > 0 {
+			item["excludeTools"] = server.DisabledTools
 		}
 		out[name] = item
 	}
