@@ -91,6 +91,11 @@ func mergeJSONMapField(path string, existing, desired []byte, field string) ([]b
 	if data, ok := mergeExistingJSONObjectMembers(existing, field, desiredMap, false); ok {
 		return data, nil
 	}
+	if _, ok := originalDoc[field]; !ok {
+		if data, ok := insertExistingJSONField(existing, field, existingDoc[field]); ok {
+			return data, nil
+		}
+	}
 	return renderJSON(existingDoc)
 }
 
@@ -149,7 +154,10 @@ func mergeExistingJSONFields(existing []byte, desiredDoc map[string]any, fields 
 		}
 		data, ok := replaceExistingJSONField(out, field, desiredValue)
 		if !ok {
-			return nil, false
+			data, ok = insertExistingJSONField(out, field, desiredValue)
+			if !ok {
+				return nil, false
+			}
 		}
 		out = data
 	}
@@ -236,6 +244,99 @@ func replaceExistingJSONField(existing []byte, field string, value any) ([]byte,
 	out = append(out, existing[:item.start]...)
 	out = append(out, data...)
 	out = append(out, existing[item.end:]...)
+	return out, true
+}
+
+func insertExistingJSONField(existing []byte, field string, value any) ([]byte, bool) {
+	ranges, err := objectValueRanges(existing)
+	if err != nil {
+		return nil, false
+	}
+	if len(ranges) == 0 {
+		openPos := skipJSONSpace(existing, 0)
+		if openPos >= len(existing) || existing[openPos] != '{' {
+			return nil, false
+		}
+		closePos := openPos + 1
+		for closePos < len(existing) && existing[closePos] != '}' {
+			closePos++
+		}
+		if closePos >= len(existing) {
+			return nil, false
+		}
+		data, err := renderJSON(value)
+		if err != nil {
+			return nil, false
+		}
+		data = bytes.TrimSuffix(data, []byte("\n"))
+
+		var buf bytes.Buffer
+		buf.WriteString("\n  ")
+		buf.WriteString(strconv.Quote(field))
+		buf.WriteString(": ")
+
+		indent := []byte("  ")
+		lines := bytes.Split(data, []byte("\n"))
+		for i := 1; i < len(lines); i++ {
+			lines[i] = append(append([]byte(nil), indent...), lines[i]...)
+		}
+		buf.Write(bytes.Join(lines, []byte("\n")))
+		buf.WriteString("\n")
+
+		out := make([]byte, 0, openPos+1+buf.Len()+len(existing)-closePos)
+		out = append(out, existing[:openPos+1]...)
+		out = append(out, buf.Bytes()...)
+		out = append(out, existing[closePos:]...)
+		return out, true
+	}
+
+	var lastRange jsonValueRange
+	first := true
+	for _, r := range ranges {
+		if first || r.end > lastRange.end {
+			lastRange = r
+			first = false
+		}
+	}
+
+	pos := skipJSONSpace(existing, lastRange.end)
+	if pos >= len(existing) {
+		return nil, false
+	}
+
+	var insertPos int
+	var needsComma bool
+	if existing[pos] == ',' {
+		insertPos = pos + 1
+		needsComma = false
+	} else if existing[pos] == '}' {
+		insertPos = pos
+		needsComma = true
+	} else {
+		return nil, false
+	}
+
+	data, err := renderJSONValueForReplacement(value, existing, lastRange.keyStart)
+	if err != nil {
+		return nil, false
+	}
+
+	indent := lineIndent(existing, lastRange.keyStart)
+
+	var buf bytes.Buffer
+	if needsComma {
+		buf.WriteString(",")
+	}
+	buf.WriteString("\n")
+	buf.Write(indent)
+	buf.WriteString(strconv.Quote(field))
+	buf.WriteString(": ")
+	buf.Write(data)
+
+	out := make([]byte, 0, len(existing)+buf.Len())
+	out = append(out, existing[:insertPos]...)
+	out = append(out, buf.Bytes()...)
+	out = append(out, existing[insertPos:]...)
 	return out, true
 }
 

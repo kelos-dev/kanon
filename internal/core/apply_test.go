@@ -436,6 +436,86 @@ func TestCoOwnedConfigMergeRejectsInvalidExistingFile(t *testing.T) {
 	}
 }
 
+func TestClaudeSettingsAndMCPMergeWithoutExistingKeys(t *testing.T) {
+	kanonHome := t.TempDir()
+	userHome := t.TempDir()
+
+	// Write settings.json without hooks field
+	settingsPath := filepath.Join(userHome, ".claude", "settings.json")
+	existingSettings := `{
+  "permissions": {
+    "allow": [
+      "Read(**)"
+    ]
+  },
+  "theme": "dark"
+}
+`
+	writeTestFile(t, settingsPath, []byte(existingSettings))
+
+	// Write .claude.json without mcpServers field
+	claudePath := filepath.Join(userHome, ".claude.json")
+	existingClaude := `{
+  "autoUpdates": false,
+  "theme": "light"
+}
+`
+	writeTestFile(t, claudePath, []byte(existingClaude))
+
+	cfg := &Config{
+		Version: 1,
+		Hooks: []Hook{{
+			Name:    "notify",
+			Targets: []string{AgentClaude},
+			Event:   "Notification",
+			Command: "bash -c 'echo notify'",
+		}},
+		MCP: MCPConfig{Servers: map[string]MCPServer{
+			"github": {Command: "github-mcp", Targets: []string{AgentClaude}},
+		}},
+	}
+
+	files, err := RenderAll(cfg, TargetOptions{KanonHome: kanonHome, UserHome: userHome, Agent: AgentClaude})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	plan, err := PlanFiles(files, ApplyOptions{KanonHome: kanonHome})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	diff := FormatPlanDiff(plan)
+
+	// The diff should NOT contain the key "theme" as a deleted/re-added line (meaningless diff)
+	// it should only show adding the hooks and mcpServers fields.
+	if strings.Contains(diff, "-  \"theme\":") || strings.Contains(diff, "-  \"permissions\":") {
+		t.Fatalf("diff includes unrelated changes to existing fields:\n%s", diff)
+	}
+
+	if err := ApplyFiles(plan, ApplyOptions{KanonHome: kanonHome}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify settings.json merged nicely
+	mergedSettings := string(readTestFile(t, settingsPath))
+	if !strings.Contains(mergedSettings, `"theme": "dark"`) {
+		t.Fatalf("theme was modified/lost in settings.json:\n%s", mergedSettings)
+	}
+	if !strings.Contains(mergedSettings, `"hooks"`) {
+		t.Fatalf("hooks were not merged into settings.json:\n%s", mergedSettings)
+	}
+
+	// Verify .claude.json merged nicely
+	mergedClaude := string(readTestFile(t, claudePath))
+	if !strings.Contains(mergedClaude, `"theme": "light"`) {
+		t.Fatalf("theme was modified/lost in .claude.json:\n%s", mergedClaude)
+	}
+	if !strings.Contains(mergedClaude, `"mcpServers"`) {
+		t.Fatalf("mcpServers were not merged into .claude.json:\n%s", mergedClaude)
+	}
+}
+
 func applyAll(t *testing.T, files []RenderedFile, opts ApplyOptions) {
 	t.Helper()
 	plan, err := PlanFiles(files, opts)
