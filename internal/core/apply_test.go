@@ -516,6 +516,105 @@ func TestClaudeSettingsAndMCPMergeWithoutExistingKeys(t *testing.T) {
 	}
 }
 
+func TestCodexConfigMergePreservesLayout(t *testing.T) {
+	kanonHome := t.TempDir()
+	userHome := t.TempDir()
+	configPath := filepath.Join(userHome, ".codex", "config.toml")
+
+	existingContent := `# This is a top-level comment
+approval_policy = "on-request"
+
+[mcp_servers.github]
+command = "old-github" # some inline comment
+`
+	writeTestFile(t, configPath, []byte(existingContent))
+
+	cfg := &Config{
+		Version: 1,
+		MCP: MCPConfig{Servers: map[string]MCPServer{
+			"github": {Command: "github-mcp", Targets: []string{AgentCodex}},
+		}},
+	}
+
+	files, err := RenderAll(cfg, TargetOptions{KanonHome: kanonHome, UserHome: userHome, Agent: AgentCodex})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	plan, err := PlanFiles(files, ApplyOptions{KanonHome: kanonHome})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	diff := FormatPlanDiff(plan)
+
+	// The diff should NOT contain the key "approval_policy" as a deleted/re-added line (meaningless diff)
+	// and should preserve the top-level comment.
+	if strings.Contains(diff, "-approval_policy") || strings.Contains(diff, "-# This is a top-level comment") {
+		t.Fatalf("diff includes unrelated changes to existing fields/comments:\n%s", diff)
+	}
+
+	if err := ApplyFiles(plan, ApplyOptions{KanonHome: kanonHome}); err != nil {
+		t.Fatal(err)
+	}
+
+	merged := string(readTestFile(t, configPath))
+	if !strings.Contains(merged, "# This is a top-level comment") {
+		t.Fatalf("top-level comment was lost:\n%s", merged)
+	}
+	if !strings.Contains(merged, `approval_policy = "on-request"`) {
+		t.Fatalf("approval_policy format or value was modified/lost:\n%s", merged)
+	}
+	if !strings.Contains(merged, "github-mcp") {
+		t.Fatalf("github server command was not updated:\n%s", merged)
+	}
+}
+
+func TestCodexConfigMergeNoChangesPreservesFileByteForByte(t *testing.T) {
+	kanonHome := t.TempDir()
+	userHome := t.TempDir()
+	configPath := filepath.Join(userHome, ".codex", "config.toml")
+
+	existingContent := `# This is a comment
+approval_policy = "on-request"
+
+[mcp_servers.github]
+command = "github-mcp"
+`
+	writeTestFile(t, configPath, []byte(existingContent))
+
+	cfg := &Config{
+		Version: 1,
+		MCP: MCPConfig{Servers: map[string]MCPServer{
+			"github": {Command: "github-mcp", Targets: []string{AgentCodex}},
+		}},
+	}
+
+	files, err := RenderAll(cfg, TargetOptions{KanonHome: kanonHome, UserHome: userHome, Agent: AgentCodex})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	plan, err := PlanFiles(files, ApplyOptions{KanonHome: kanonHome})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	diff := FormatPlanDiff(plan)
+	if !strings.Contains(diff, "No changes.") && diff != "" {
+		t.Fatalf("expected no changes diff, got:\n%s", diff)
+	}
+
+	if err := ApplyFiles(plan, ApplyOptions{KanonHome: kanonHome}); err != nil {
+		t.Fatal(err)
+	}
+
+	merged := string(readTestFile(t, configPath))
+	if merged != existingContent {
+		t.Fatalf("file was modified despite no changes:\nExpected:\n%s\nGot:\n%s", existingContent, merged)
+	}
+}
+
 func applyAll(t *testing.T, files []RenderedFile, opts ApplyOptions) {
 	t.Helper()
 	plan, err := PlanFiles(files, opts)

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"regexp"
 	"sort"
 	"strconv"
 )
@@ -29,6 +30,10 @@ func mergeTOMLTable(path string, existing, desired []byte, tableName string) ([]
 	if err != nil {
 		return nil, err
 	}
+	originalDoc, err := parseTOMLDocument(path, existing)
+	if err != nil {
+		return nil, err
+	}
 	desiredDoc, err := parseTOMLDocument(path, desired)
 	if err != nil {
 		return nil, fmt.Errorf("generated content for %s is invalid: %w", path, err)
@@ -38,7 +43,7 @@ func mergeTOMLTable(path string, existing, desired []byte, tableName string) ([]
 		return nil, fmt.Errorf("generated content for %s is invalid: %w", path, err)
 	}
 	if !ok {
-		return renderTOML(existingDoc)
+		return existing, nil
 	}
 	existingTable, ok, err := objectValue(existingDoc, tableName)
 	if err != nil {
@@ -51,7 +56,109 @@ func mergeTOMLTable(path string, existing, desired []byte, tableName string) ([]
 		existingTable[name] = value
 	}
 	existingDoc[tableName] = existingTable
+
+	if reflect.DeepEqual(existingDoc, originalDoc) {
+		return existing, nil
+	}
+
+	if data, ok := mergeTOMLTablePreservingLayout(existing, existingTable, tableName); ok {
+		return data, nil
+	}
+
 	return renderTOML(existingDoc)
+}
+
+func mergeTOMLTablePreservingLayout(existing []byte, mergedTable map[string]any, tableName string) ([]byte, bool) {
+	headerRegex, err := regexp.Compile(`^\s*\[+` + regexp.QuoteMeta(tableName) + `(?:\]|\.|\s)`)
+	if err != nil {
+		return nil, false
+	}
+	keyRegex, err := regexp.Compile(`^\s*` + regexp.QuoteMeta(tableName) + `\s*=`)
+	if err != nil {
+		return nil, false
+	}
+
+	lines := bytes.Split(existing, []byte("\n"))
+	var keptLines [][]byte
+	inTargetTable := false
+	hasSeenHeader := false
+	insertIdx := -1
+
+	for _, line := range lines {
+		trimmed := bytes.TrimSpace(line)
+
+		// Check if it is a header
+		isHeader := len(trimmed) > 0 && trimmed[0] == '['
+		if isHeader {
+			hasSeenHeader = true
+			if headerRegex.Match(trimmed) {
+				inTargetTable = true
+				if insertIdx == -1 {
+					insertIdx = len(keptLines)
+				}
+				continue
+			} else {
+				inTargetTable = false
+			}
+		}
+
+		// If we haven't seen a header, check if it's a top-level key
+		if !hasSeenHeader && keyRegex.Match(line) {
+			if insertIdx == -1 {
+				insertIdx = len(keptLines)
+			}
+			continue
+		}
+
+		if inTargetTable {
+			// Discard lines belonging to the target table
+			continue
+		}
+
+		keptLines = append(keptLines, line)
+	}
+
+	// Render the new table
+	newTableDoc := map[string]any{
+		tableName: mergedTable,
+	}
+	newTableBytes, err := renderTOML(newTableDoc)
+	if err != nil {
+		return nil, false
+	}
+	newTableBytes = bytes.TrimSpace(newTableBytes)
+
+	// Construct the final output
+	var buf bytes.Buffer
+	if insertIdx == -1 {
+		// Append to the end
+		buf.Write(bytes.Join(keptLines, []byte("\n")))
+		content := bytes.TrimSpace(buf.Bytes())
+		buf.Reset()
+		if len(content) > 0 {
+			buf.Write(content)
+			buf.WriteString("\n\n")
+		}
+		buf.Write(newTableBytes)
+		buf.WriteString("\n")
+	} else {
+		// Insert at the tracked index
+		left := bytes.TrimSpace(bytes.Join(keptLines[:insertIdx], []byte("\n")))
+		right := bytes.TrimSpace(bytes.Join(keptLines[insertIdx:], []byte("\n")))
+
+		if len(left) > 0 {
+			buf.Write(left)
+			buf.WriteString("\n\n")
+		}
+		buf.Write(newTableBytes)
+		if len(right) > 0 {
+			buf.WriteString("\n\n")
+			buf.Write(right)
+		}
+		buf.WriteString("\n")
+	}
+
+	return buf.Bytes(), true
 }
 
 func mergeJSONMapField(path string, existing, desired []byte, field string) ([]byte, error) {
