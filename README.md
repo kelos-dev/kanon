@@ -60,6 +60,9 @@ Every command is an arrow between two states:
 | `diff` | target ↔ destination | Preview the changes apply would make |
 | `apply` | target → destination | Write the changes to disk |
 | `status` | — | Source git status and destination drift |
+| `lock` | source | Create or repair `kanon.lock` remote skill pins |
+| `lock check` | source | Verify remote skill pins against `kanon.lock` |
+| `lock update` | source | Intentionally re-resolve remote skill pins in `kanon.lock` |
 | `import` (alias `add`) | destination → source | Capture existing agent files into the spec |
 | `update` | remote → destination | Pull, then render and apply in one step |
 | `ui` | target ↔ destination | Review, select, and apply changes in an interactive TUI |
@@ -145,6 +148,18 @@ Remote skills are fetched automatically the first time `render`, `diff`,
 under `.kanon/cache/sources/`, which is gitignored by the starter `.gitignore`;
 if the cache already exists, Kanon reuses it and does not refresh it. Pin `ref`
 to a commit SHA for reproducible behavior across machines.
+
+For mutable refs such as branches or tags, run `kanon lock` to write a tracked
+`kanon.lock` entry with the resolved commit and a stable content hash for each
+enabled remote skill. When a matching lock entry exists, render, diff, apply,
+status, and update materialize that locked commit instead of the mutable
+declared ref. Plain `kanon lock` preserves existing pins when their configured
+coordinates still match, so it will not silently advance a branch. Use
+`kanon lock check` in CI to fail when a remote source is missing from the
+lockfile, its configured coordinates changed, its declared ref now resolves
+somewhere else, or the cached content does not match the locked hash. Use
+`kanon lock update <skill>` or `kanon lock update --all` to intentionally
+refresh lock entries.
 
 Co-owned config files that the agent also writes are merged instead of replaced.
 For Codex `config.toml` and Claude `.claude.json` / project `.mcp.json`, Kanon

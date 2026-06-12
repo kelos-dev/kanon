@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
-	"regexp"
 	"sort"
 	"strconv"
 )
@@ -30,10 +29,6 @@ func mergeTOMLTable(path string, existing, desired []byte, tableName string) ([]
 	if err != nil {
 		return nil, err
 	}
-	originalDoc, err := parseTOMLDocument(path, existing)
-	if err != nil {
-		return nil, err
-	}
 	desiredDoc, err := parseTOMLDocument(path, desired)
 	if err != nil {
 		return nil, fmt.Errorf("generated content for %s is invalid: %w", path, err)
@@ -43,7 +38,7 @@ func mergeTOMLTable(path string, existing, desired []byte, tableName string) ([]
 		return nil, fmt.Errorf("generated content for %s is invalid: %w", path, err)
 	}
 	if !ok {
-		return existing, nil
+		return renderTOML(existingDoc)
 	}
 	existingTable, ok, err := objectValue(existingDoc, tableName)
 	if err != nil {
@@ -56,109 +51,7 @@ func mergeTOMLTable(path string, existing, desired []byte, tableName string) ([]
 		existingTable[name] = value
 	}
 	existingDoc[tableName] = existingTable
-
-	if reflect.DeepEqual(existingDoc, originalDoc) {
-		return existing, nil
-	}
-
-	if data, ok := mergeTOMLTablePreservingLayout(existing, existingTable, tableName); ok {
-		return data, nil
-	}
-
 	return renderTOML(existingDoc)
-}
-
-func mergeTOMLTablePreservingLayout(existing []byte, mergedTable map[string]any, tableName string) ([]byte, bool) {
-	headerRegex, err := regexp.Compile(`^\s*\[+` + regexp.QuoteMeta(tableName) + `(?:\]|\.|\s)`)
-	if err != nil {
-		return nil, false
-	}
-	keyRegex, err := regexp.Compile(`^\s*` + regexp.QuoteMeta(tableName) + `\s*=`)
-	if err != nil {
-		return nil, false
-	}
-
-	lines := bytes.Split(existing, []byte("\n"))
-	var keptLines [][]byte
-	inTargetTable := false
-	hasSeenHeader := false
-	insertIdx := -1
-
-	for _, line := range lines {
-		trimmed := bytes.TrimSpace(line)
-
-		// Check if it is a header
-		isHeader := len(trimmed) > 0 && trimmed[0] == '['
-		if isHeader {
-			hasSeenHeader = true
-			if headerRegex.Match(trimmed) {
-				inTargetTable = true
-				if insertIdx == -1 {
-					insertIdx = len(keptLines)
-				}
-				continue
-			} else {
-				inTargetTable = false
-			}
-		}
-
-		// If we haven't seen a header, check if it's a top-level key
-		if !hasSeenHeader && keyRegex.Match(line) {
-			if insertIdx == -1 {
-				insertIdx = len(keptLines)
-			}
-			continue
-		}
-
-		if inTargetTable {
-			// Discard lines belonging to the target table
-			continue
-		}
-
-		keptLines = append(keptLines, line)
-	}
-
-	// Render the new table
-	newTableDoc := map[string]any{
-		tableName: mergedTable,
-	}
-	newTableBytes, err := renderTOML(newTableDoc)
-	if err != nil {
-		return nil, false
-	}
-	newTableBytes = bytes.TrimSpace(newTableBytes)
-
-	// Construct the final output
-	var buf bytes.Buffer
-	if insertIdx == -1 {
-		// Append to the end
-		buf.Write(bytes.Join(keptLines, []byte("\n")))
-		content := bytes.TrimSpace(buf.Bytes())
-		buf.Reset()
-		if len(content) > 0 {
-			buf.Write(content)
-			buf.WriteString("\n\n")
-		}
-		buf.Write(newTableBytes)
-		buf.WriteString("\n")
-	} else {
-		// Insert at the tracked index
-		left := bytes.TrimSpace(bytes.Join(keptLines[:insertIdx], []byte("\n")))
-		right := bytes.TrimSpace(bytes.Join(keptLines[insertIdx:], []byte("\n")))
-
-		if len(left) > 0 {
-			buf.Write(left)
-			buf.WriteString("\n\n")
-		}
-		buf.Write(newTableBytes)
-		if len(right) > 0 {
-			buf.WriteString("\n\n")
-			buf.Write(right)
-		}
-		buf.WriteString("\n")
-	}
-
-	return buf.Bytes(), true
 }
 
 func mergeJSONMapField(path string, existing, desired []byte, field string) ([]byte, error) {
@@ -197,11 +90,6 @@ func mergeJSONMapField(path string, existing, desired []byte, field string) ([]b
 	}
 	if data, ok := mergeExistingJSONObjectMembers(existing, field, desiredMap, false); ok {
 		return data, nil
-	}
-	if _, ok := originalDoc[field]; !ok {
-		if data, ok := insertExistingJSONField(existing, field, existingDoc[field]); ok {
-			return data, nil
-		}
 	}
 	return renderJSON(existingDoc)
 }
@@ -261,10 +149,7 @@ func mergeExistingJSONFields(existing []byte, desiredDoc map[string]any, fields 
 		}
 		data, ok := replaceExistingJSONField(out, field, desiredValue)
 		if !ok {
-			data, ok = insertExistingJSONField(out, field, desiredValue)
-			if !ok {
-				return nil, false
-			}
+			return nil, false
 		}
 		out = data
 	}
@@ -351,99 +236,6 @@ func replaceExistingJSONField(existing []byte, field string, value any) ([]byte,
 	out = append(out, existing[:item.start]...)
 	out = append(out, data...)
 	out = append(out, existing[item.end:]...)
-	return out, true
-}
-
-func insertExistingJSONField(existing []byte, field string, value any) ([]byte, bool) {
-	ranges, err := objectValueRanges(existing)
-	if err != nil {
-		return nil, false
-	}
-	if len(ranges) == 0 {
-		openPos := skipJSONSpace(existing, 0)
-		if openPos >= len(existing) || existing[openPos] != '{' {
-			return nil, false
-		}
-		closePos := openPos + 1
-		for closePos < len(existing) && existing[closePos] != '}' {
-			closePos++
-		}
-		if closePos >= len(existing) {
-			return nil, false
-		}
-		data, err := renderJSON(value)
-		if err != nil {
-			return nil, false
-		}
-		data = bytes.TrimSuffix(data, []byte("\n"))
-
-		var buf bytes.Buffer
-		buf.WriteString("\n  ")
-		buf.WriteString(strconv.Quote(field))
-		buf.WriteString(": ")
-
-		indent := []byte("  ")
-		lines := bytes.Split(data, []byte("\n"))
-		for i := 1; i < len(lines); i++ {
-			lines[i] = append(append([]byte(nil), indent...), lines[i]...)
-		}
-		buf.Write(bytes.Join(lines, []byte("\n")))
-		buf.WriteString("\n")
-
-		out := make([]byte, 0, openPos+1+buf.Len()+len(existing)-closePos)
-		out = append(out, existing[:openPos+1]...)
-		out = append(out, buf.Bytes()...)
-		out = append(out, existing[closePos:]...)
-		return out, true
-	}
-
-	var lastRange jsonValueRange
-	first := true
-	for _, r := range ranges {
-		if first || r.end > lastRange.end {
-			lastRange = r
-			first = false
-		}
-	}
-
-	pos := skipJSONSpace(existing, lastRange.end)
-	if pos >= len(existing) {
-		return nil, false
-	}
-
-	var insertPos int
-	var needsComma bool
-	if existing[pos] == ',' {
-		insertPos = pos + 1
-		needsComma = false
-	} else if existing[pos] == '}' {
-		insertPos = pos
-		needsComma = true
-	} else {
-		return nil, false
-	}
-
-	data, err := renderJSONValueForReplacement(value, existing, lastRange.keyStart)
-	if err != nil {
-		return nil, false
-	}
-
-	indent := lineIndent(existing, lastRange.keyStart)
-
-	var buf bytes.Buffer
-	if needsComma {
-		buf.WriteString(",")
-	}
-	buf.WriteString("\n")
-	buf.Write(indent)
-	buf.WriteString(strconv.Quote(field))
-	buf.WriteString(": ")
-	buf.Write(data)
-
-	out := make([]byte, 0, len(existing)+buf.Len())
-	out = append(out, existing[:insertPos]...)
-	out = append(out, buf.Bytes()...)
-	out = append(out, existing[insertPos:]...)
 	return out, true
 }
 

@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -224,6 +225,169 @@ func TestStatusReportsRemoteSkillMaterializationErrors(t *testing.T) {
 	}
 }
 
+func TestLockCommandWritesLockfile(t *testing.T) {
+	repo, ref := newRemoteSkillRepo(t, "version one\n")
+	home := t.TempDir()
+	writeRemoteSkillConfig(t, home, repo, ref)
+
+	cmd := NewRootCommand()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"--home", home, "lock"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("lock failed: %v\n%s", err, out.String())
+	}
+
+	lock, _, err := core.LoadSourceLock(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(lock.Sources) != 1 {
+		t.Fatalf("expected one lock entry, got %#v", lock.Sources)
+	}
+	entry := lock.Sources[0]
+	if entry.Owner != "skill.remote-review" {
+		t.Fatalf("unexpected owner %q", entry.Owner)
+	}
+	if entry.URL != repo {
+		t.Fatalf("lock wrote url %q, want declared url %q", entry.URL, repo)
+	}
+	if entry.Ref != ref {
+		t.Fatalf("lock wrote ref %q, want %q", entry.Ref, ref)
+	}
+	if entry.ResolvedRef == "" || entry.ResolvedRef == ref {
+		t.Fatalf("lock did not record resolved commit sha: %#v", entry)
+	}
+	if !strings.HasPrefix(entry.ContentSHA256, "sha256:") {
+		t.Fatalf("lock did not record content hash: %#v", entry)
+	}
+	if !strings.Contains(out.String(), "Locked 1 remote skill source(s)") {
+		t.Fatalf("unexpected output: %s", out.String())
+	}
+	checkOut := runKanon(t, home, "lock", "check")
+	if !strings.Contains(checkOut, "kanon.lock is valid.") {
+		t.Fatalf("unexpected check output: %s", checkOut)
+	}
+}
+
+func TestLockCommandPreservesExistingPinAfterBranchMoves(t *testing.T) {
+	repo, ref := newRemoteSkillRepo(t, "version one\n")
+	home := t.TempDir()
+	writeRemoteSkillConfig(t, home, repo, ref)
+	runKanon(t, home, "lock")
+
+	lock, _, err := core.LoadSourceLock(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	initial := lock.Sources[0].ResolvedRef
+
+	commitRemoteSkill(t, repo, "version two\n")
+	runKanon(t, home, "lock")
+
+	lock, _, err = core.LoadSourceLock(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := lock.Sources[0].ResolvedRef; got != initial {
+		t.Fatalf("lock moved existing pin from %s to %s", initial, got)
+	}
+}
+
+func TestLockUpdateAllRefreshesExistingPinAfterBranchMoves(t *testing.T) {
+	repo, ref := newRemoteSkillRepo(t, "version one\n")
+	home := t.TempDir()
+	writeRemoteSkillConfig(t, home, repo, ref)
+	runKanon(t, home, "lock")
+
+	lock, _, err := core.LoadSourceLock(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	initial := lock.Sources[0].ResolvedRef
+
+	commitRemoteSkill(t, repo, "version two\n")
+	runKanon(t, home, "lock", "update", "--all")
+
+	lock, _, err = core.LoadSourceLock(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := lock.Sources[0].ResolvedRef; got == initial {
+		t.Fatalf("lock update --all kept stale pin %s", got)
+	}
+}
+
+func TestRenderUsesLockedRemoteSkillAfterBranchMoves(t *testing.T) {
+	repo, ref := newRemoteSkillRepo(t, "version one\n")
+	home := t.TempDir()
+	writeRemoteSkillConfig(t, home, repo, ref)
+	runKanon(t, home, "lock")
+
+	commitRemoteSkill(t, repo, "version two\n")
+	if err := os.RemoveAll(filepath.Join(home, ".kanon", "cache")); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := NewRootCommand()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"--home", home, "render"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("render failed: %v\n%s", err, out.String())
+	}
+	if !strings.Contains(out.String(), "version one") {
+		t.Fatalf("render did not use locked content:\n%s", out.String())
+	}
+	if strings.Contains(out.String(), "version two") {
+		t.Fatalf("render used moved branch content despite lock:\n%s", out.String())
+	}
+}
+
+func TestLockCheckDetectsMovedRef(t *testing.T) {
+	repo, ref := newRemoteSkillRepo(t, "version one\n")
+	home := t.TempDir()
+	writeRemoteSkillConfig(t, home, repo, ref)
+	runKanon(t, home, "lock")
+	commitRemoteSkill(t, repo, "version two\n")
+
+	cmd := NewRootCommand()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"--home", home, "lock", "check"})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatalf("expected lock check to fail after ref moved\n%s", out.String())
+	}
+	if !strings.Contains(err.Error(), "resolves to") {
+		t.Fatalf("unexpected error: %v\n%s", err, out.String())
+	}
+}
+
+func TestLockRejectsLiteralCredentials(t *testing.T) {
+	home := t.TempDir()
+	writeRemoteSkillConfig(t, home, "https://user:secret@example.com/acme/skills.git", "main")
+
+	cmd := NewRootCommand()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"--home", home, "lock"})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatalf("expected lock to reject literal credentials\n%s", out.String())
+	}
+	if !strings.Contains(err.Error(), "literal credentials") {
+		t.Fatalf("unexpected error: %v\n%s", err, out.String())
+	}
+	if _, statErr := os.Stat(filepath.Join(home, "kanon.lock")); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("lock wrote kanon.lock despite credential error (stat err=%v)", statErr)
+	}
+}
+
 func gitRun(t *testing.T, dir string, args ...string) {
 	t.Helper()
 	if dir != "" {
@@ -256,4 +420,48 @@ func writeFile(t *testing.T, path, content string) {
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func newRemoteSkillRepo(t *testing.T, content string) (string, string) {
+	t.Helper()
+	repo := t.TempDir()
+	gitRun(t, repo, "init")
+	gitRun(t, repo, "config", "user.email", "test@example.com")
+	gitRun(t, repo, "config", "user.name", "Test")
+	commitRemoteSkill(t, repo, content)
+	ref := strings.TrimSpace(string(gitOutput(t, repo, "rev-parse", "--abbrev-ref", "HEAD")))
+	return repo, ref
+}
+
+func commitRemoteSkill(t *testing.T, repo, content string) string {
+	t.Helper()
+	writeFile(t, filepath.Join(repo, "SKILL.md"), "# Remote Review\n\n"+content)
+	gitRun(t, repo, "add", ".")
+	gitRun(t, repo, "commit", "-m", "update skill")
+	return strings.TrimSpace(string(gitOutput(t, repo, "rev-parse", "HEAD")))
+}
+
+func writeRemoteSkillConfig(t *testing.T, home, repo, ref string) {
+	t.Helper()
+	writeFile(t, filepath.Join(home, "kanon.yaml"), fmt.Sprintf(`version: 1
+skills:
+  - name: remote-review
+    source:
+      type: git
+      url: %s
+      ref: %s
+`, repo, ref))
+}
+
+func runKanon(t *testing.T, home string, args ...string) string {
+	t.Helper()
+	cmd := NewRootCommand()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs(append([]string{"--home", home}, args...))
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("kanon %v failed: %v\n%s", args, err, out.String())
+	}
+	return out.String()
 }

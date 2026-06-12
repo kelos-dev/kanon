@@ -48,8 +48,8 @@ It works in three states, mirroring chezmoi:
                      ~/.codex, ~/.claude, and project directories)
 
 Commands move data between these states: render (source to target), diff and
-apply (target to destination), import (destination back to source), and
-pull/push/update to sync the source with a remote.`,
+apply (target to destination), import (destination back to source), lock remote
+skill pins, and pull/push/update to sync the source with a remote.`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
@@ -64,6 +64,8 @@ pull/push/update to sync the source with a remote.`,
 	cmd.AddCommand(diffCommand(opts))
 	cmd.AddCommand(applyCommand(opts))
 	cmd.AddCommand(statusCommand(opts))
+	cmd.AddCommand(lockCommand(opts))
+	cmd.AddCommand(sourceCommand(opts))
 	cmd.AddCommand(importCommand(opts))
 	cmd.AddCommand(updateCommand(opts))
 	cmd.AddCommand(uiCommand(opts))
@@ -112,6 +114,13 @@ func validateCommand(opts *options) *cobra.Command {
 			}
 			if err := validationError(core.ValidateConfig(cfg, home)); err != nil {
 				return err
+			}
+			lock, _, err := core.LoadSourceLock(home)
+			if err != nil {
+				return err
+			}
+			for _, warning := range core.SourceLockWarnings(cfg, lock) {
+				fmt.Fprintf(cmd.ErrOrStderr(), "warning: %s\n", warning)
 			}
 			fmt.Fprintln(cmd.OutOrStdout(), "kanon.yaml is valid.")
 			return nil
@@ -191,6 +200,149 @@ func statusCommand(opts *options) *cobra.Command {
 			fmt.Fprint(cmd.OutOrStdout(), core.DriftSummary(plan))
 			return nil
 		},
+	}
+}
+
+func lockCommand(opts *options) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "lock",
+		Short: "Create or repair kanon.lock remote skill pins",
+		Args:  cobra.NoArgs,
+		RunE:  runLockCommand(opts),
+	}
+	cmd.AddCommand(lockCheckCommand(opts))
+	cmd.AddCommand(lockUpdateCommand(opts))
+	return cmd
+}
+
+func sourceCommand(opts *options) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:    "source",
+		Short:  "Manage remote source locks",
+		Hidden: true,
+	}
+	cmd.AddCommand(sourceLockCommand(opts))
+	cmd.AddCommand(sourceCheckCommand(opts))
+	cmd.AddCommand(sourceUpdateCommand(opts))
+	return cmd
+}
+
+func runLockCommand(opts *options) func(*cobra.Command, []string) error {
+	return func(cmd *cobra.Command, _ []string) error {
+		cfg, home, err := opts.loadConfig()
+		if err != nil {
+			return err
+		}
+		if err := validationError(core.ValidateConfig(cfg, home)); err != nil {
+			return err
+		}
+		lock, err := core.LockRemoteSkillSources(cfg, home)
+		if err != nil {
+			return err
+		}
+		path, err := core.WriteSourceLock(home, lock)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(cmd.OutOrStdout(), "Locked %d remote skill source(s) in %s\n", len(lock.Sources), path)
+		return nil
+	}
+}
+
+func sourceLockCommand(opts *options) *cobra.Command {
+	return &cobra.Command{
+		Use:   "lock",
+		Short: "Resolve remote skill sources and write kanon.lock",
+		Args:  cobra.NoArgs,
+		RunE:  runLockCommand(opts),
+	}
+}
+
+func lockCheckCommand(opts *options) *cobra.Command {
+	return &cobra.Command{
+		Use:   "check",
+		Short: "Verify remote skill sources against kanon.lock",
+		Args:  cobra.NoArgs,
+		RunE:  runLockCheckCommand(opts, func() bool { return true }),
+	}
+}
+
+func sourceCheckCommand(opts *options) *cobra.Command {
+	var locked bool
+	cmd := &cobra.Command{
+		Use:   "check",
+		Short: "Verify remote skill sources against kanon.lock",
+		Args:  cobra.NoArgs,
+		RunE:  runLockCheckCommand(opts, func() bool { return locked }),
+	}
+	cmd.Flags().BoolVar(&locked, "locked", false, "require every remote source to match kanon.lock")
+	return cmd
+}
+
+func runLockCheckCommand(opts *options, requireLocked func() bool) func(*cobra.Command, []string) error {
+	return func(cmd *cobra.Command, _ []string) error {
+		cfg, home, err := opts.loadConfig()
+		if err != nil {
+			return err
+		}
+		if err := validationError(core.ValidateConfig(cfg, home)); err != nil {
+			return err
+		}
+		if err := validationError(core.CheckRemoteSkillSources(cfg, home, requireLocked())); err != nil {
+			return err
+		}
+		fmt.Fprintln(cmd.OutOrStdout(), "kanon.lock is valid.")
+		return nil
+	}
+}
+
+func lockUpdateCommand(opts *options) *cobra.Command {
+	var all bool
+	cmd := &cobra.Command{
+		Use:   "update [skill ...]",
+		Short: "Re-resolve remote skill sources and update kanon.lock",
+		RunE:  runLockUpdateCommand(opts, &all, "lock update"),
+	}
+	cmd.Flags().BoolVar(&all, "all", false, "update every enabled remote skill source")
+	return cmd
+}
+
+func sourceUpdateCommand(opts *options) *cobra.Command {
+	var all bool
+	cmd := &cobra.Command{
+		Use:   "update [skill ...]",
+		Short: "Re-resolve remote skill sources and update kanon.lock",
+		RunE:  runLockUpdateCommand(opts, &all, "source update"),
+	}
+	cmd.Flags().BoolVar(&all, "all", false, "update every enabled remote skill source")
+	return cmd
+}
+
+func runLockUpdateCommand(opts *options, all *bool, commandName string) func(*cobra.Command, []string) error {
+	return func(cmd *cobra.Command, args []string) error {
+		if *all && len(args) > 0 {
+			return fmt.Errorf("use either %s --all or named skills, not both", commandName)
+		}
+		if !*all && len(args) == 0 {
+			return fmt.Errorf("%s requires a skill name or --all", commandName)
+		}
+		cfg, home, err := opts.loadConfig()
+		if err != nil {
+			return err
+		}
+		if err := validationError(core.ValidateConfig(cfg, home)); err != nil {
+			return err
+		}
+		lock, err := core.UpdateRemoteSkillSources(cfg, home, args, *all)
+		if err != nil {
+			return err
+		}
+		path, err := core.WriteSourceLock(home, lock)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(cmd.OutOrStdout(), "Updated %s\n", path)
+		return nil
 	}
 }
 
@@ -290,10 +442,15 @@ func (opts *options) render() ([]core.RenderedFile, string, error) {
 	if err := validationError(core.ValidateConfig(cfg, home)); err != nil {
 		return nil, "", err
 	}
+	lock, _, err := core.LoadSourceLock(home)
+	if err != nil {
+		return nil, "", err
+	}
 	target, err := opts.targetOptions()
 	if err != nil {
 		return nil, "", err
 	}
+	target.SourceLock = lock
 	files, err := core.RenderAll(cfg, target)
 	if err != nil {
 		return nil, "", err
