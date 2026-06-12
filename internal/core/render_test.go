@@ -339,6 +339,30 @@ func TestRemoteSkillInstallKeepsConcurrentCacheWinner(t *testing.T) {
 	}
 }
 
+func TestHashMaterializedSkillFramesBinaryContent(t *testing.T) {
+	root := t.TempDir()
+	first := filepath.Join(root, "first")
+	second := filepath.Join(root, "second")
+	for _, dir := range []string{first, second} {
+		writeTestFile(t, filepath.Join(dir, "SKILL.md"), []byte("---\nname: hash\n---\n"))
+	}
+	writeTestFile(t, filepath.Join(first, "a"), []byte{0, 'b', 0})
+	writeTestFile(t, filepath.Join(second, "a"), nil)
+	writeTestFile(t, filepath.Join(second, "b"), nil)
+
+	firstHash, err := hashMaterializedSkill("hash", first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondHash, err := hashMaterializedSkill("hash", second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstHash == secondHash {
+		t.Fatalf("hash collision for differently framed trees: %s", firstHash)
+	}
+}
+
 func renderedByPath(files []RenderedFile) map[string]RenderedFile {
 	out := map[string]RenderedFile{}
 	for _, file := range files {

@@ -36,6 +36,21 @@ type RemoteSource struct {
 	Subdir string `yaml:"subdir"`
 }
 
+type SourceLock struct {
+	Version int               `yaml:"version"`
+	Sources []SourceLockEntry `yaml:"sources"`
+}
+
+type SourceLockEntry struct {
+	Owner         string `yaml:"owner"`
+	Type          string `yaml:"type"`
+	URL           string `yaml:"url"`
+	Ref           string `yaml:"ref"`
+	Subdir        string `yaml:"subdir"`
+	ResolvedRef   string `yaml:"resolved_ref"`
+	ContentSHA256 string `yaml:"content_sha256"`
+}
+
 type MCPConfig struct {
 	Servers map[string]MCPServer `yaml:"servers"`
 }
@@ -79,10 +94,11 @@ type Hook struct {
 }
 
 type TargetOptions struct {
-	KanonHome string
-	UserHome  string
-	Project   string
-	Agent     string
+	KanonHome  string
+	UserHome   string
+	Project    string
+	Agent      string
+	SourceLock *SourceLock
 }
 
 type ImportOptions struct {
