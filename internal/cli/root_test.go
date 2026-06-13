@@ -225,6 +225,33 @@ func TestStatusReportsRemoteSkillMaterializationErrors(t *testing.T) {
 	}
 }
 
+func TestStatusFailsWhenConfigMissing(t *testing.T) {
+	userHome := t.TempDir()
+	t.Setenv("HOME", userHome)
+
+	home := t.TempDir()
+	if err := core.InitHome(core.InitOptions{Home: home}); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(home, "kanon.yaml")
+	if err := os.Remove(configPath); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := NewRootCommand()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"--home", home, "status"})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatalf("expected status to fail when %s is missing\n%s", configPath, out.String())
+	}
+	if !strings.Contains(err.Error(), configPath) {
+		t.Fatalf("expected status error to name %s, got %v\n%s", configPath, err, out.String())
+	}
+}
+
 func TestLockCommandWritesLockfile(t *testing.T) {
 	repo, ref := newRemoteSkillRepo(t, "version one\n")
 	home := t.TempDir()
