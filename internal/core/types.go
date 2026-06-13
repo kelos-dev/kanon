@@ -25,7 +25,7 @@ type Skill struct {
 	Name    string        `yaml:"name"`
 	Path    string        `yaml:"path"`
 	Source  *RemoteSource `yaml:"source"`
-	Targets []string      `yaml:"targets"`
+	Targets []string      `yaml:"targets,omitempty"`
 	Enabled *bool         `yaml:"enabled"`
 }
 
@@ -71,7 +71,7 @@ type MCPServer struct {
 	DisabledTools     []string                 `yaml:"disabled_tools"`
 	DefaultApproval   string                   `yaml:"default_approval"`
 	Tools             map[string]MCPToolPolicy `yaml:"tools"`
-	Targets           []string                 `yaml:"targets"`
+	Targets           []string                 `yaml:"targets,omitempty"`
 	Enabled           *bool                    `yaml:"enabled"`
 }
 
@@ -83,7 +83,7 @@ type MCPToolPolicy struct {
 
 type Hook struct {
 	Name    string   `yaml:"name"`
-	Targets []string `yaml:"targets"`
+	Targets []string `yaml:"targets,omitempty"`
 	Event   string   `yaml:"event"`
 	Matcher string   `yaml:"matcher"`
 	Type    string   `yaml:"type"`

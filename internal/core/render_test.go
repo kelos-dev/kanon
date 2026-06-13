@@ -76,6 +76,70 @@ func TestRenderUserScopedOutputs(t *testing.T) {
 	}
 }
 
+func TestRenderTreatsEmptyTargetsAsAllTargets(t *testing.T) {
+	kanonHome := t.TempDir()
+	userHome := t.TempDir()
+	writeTestFile(t, filepath.Join(kanonHome, "skills", "shared", "SKILL.md"), []byte("---\nname: shared\n---\n"))
+	writeTestFile(t, filepath.Join(kanonHome, "skills", "empty", "SKILL.md"), []byte("---\nname: empty\n---\n"))
+	writeTestFile(t, filepath.Join(kanonHome, "kanon.yaml"), []byte(`
+version: 1
+skills:
+  - name: shared
+  - name: empty
+    targets: []
+mcp:
+  servers:
+    shared:
+      command: shared-mcp
+    empty:
+      command: empty-mcp
+      targets: []
+hooks:
+  - name: shared-hook
+    event: PostToolUse
+    command: echo shared
+  - name: empty-hook
+    targets: []
+    event: PostToolUse
+    command: echo empty
+`))
+
+	cfg, _, err := LoadConfig(kanonHome, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !HasTarget(cfg.Skills[0].Targets, AgentCodex) {
+		t.Fatalf("omitted targets should apply to codex: %#v", cfg.Skills[0].Targets)
+	}
+	if !HasTarget(cfg.Skills[1].Targets, AgentCodex) {
+		t.Fatalf("empty targets should apply to codex: %#v", cfg.Skills[1].Targets)
+	}
+
+	files, err := RenderAll(cfg, TargetOptions{
+		KanonHome: kanonHome,
+		UserHome:  userHome,
+		Agent:     AgentCodex,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	byPath := renderedByPath(files)
+	if _, ok := byPath[filepath.Join(userHome, ".agents", "skills", "shared", "SKILL.md")]; !ok {
+		t.Fatalf("all-target skill was not rendered")
+	}
+	if _, ok := byPath[filepath.Join(userHome, ".agents", "skills", "empty", "SKILL.md")]; !ok {
+		t.Fatalf("empty-target skill was not rendered")
+	}
+	config := string(byPath[filepath.Join(userHome, ".codex", "config.toml")].Content)
+	if !strings.Contains(config, "shared-mcp") || !strings.Contains(config, "empty-mcp") {
+		t.Fatalf("empty-target MCP server was not rendered:\n%s", config)
+	}
+	hooks := string(byPath[filepath.Join(userHome, ".codex", "hooks.json")].Content)
+	if !strings.Contains(hooks, "echo shared") || !strings.Contains(hooks, "echo empty") {
+		t.Fatalf("empty-target hook was not rendered:\n%s", hooks)
+	}
+}
+
 func TestValidateEnvRefs(t *testing.T) {
 	cfg := &Config{
 		Version: 1,

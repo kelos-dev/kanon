@@ -275,6 +275,16 @@ func TestPlanImportTreatsExistingAllTargetSkillAsCovered(t *testing.T) {
 	}
 }
 
+func TestMergeImportTargetsTreatsEmptyTargetsAsAllTargets(t *testing.T) {
+	got := mergeImportTargets([]string{}, []string{AgentCodex})
+	if got != nil {
+		t.Fatalf("empty targets should merge as all targets, got %#v", got)
+	}
+	if got := mergeImportTargets(nil, []string{AgentCodex}); got != nil {
+		t.Fatalf("omitted targets should remain all targets, got %#v", got)
+	}
+}
+
 func TestImportNormalizesSharedAgentConfiguration(t *testing.T) {
 	userHome := t.TempDir()
 	writeTestFile(t, filepath.Join(userHome, ".codex", "config.toml"), []byte(`
