@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -21,13 +22,18 @@ type materializedRemoteSkill struct {
 	ContentSHA256 string
 }
 
+type materializedSkillDirectoryItem struct {
+	Name string
+	Path string
+}
+
 type preparedRemoteSource struct {
 	ExpandedURL string
 	Subdir      string
 }
 
-func materializeRemoteSkill(home, name string, source RemoteSource, lock *SourceLockEntry) (string, error) {
-	prepared, err := prepareRemoteSource(name, source)
+func materializeRemoteSkillSource(home, name string, source RemoteSource, lock *SourceLockEntry) (string, error) {
+	prepared, err := prepareRemoteSource("git skill provider", name, source)
 	if err != nil {
 		return "", err
 	}
@@ -43,36 +49,36 @@ func materializeRemoteSkill(home, name string, source RemoteSource, lock *Source
 		Ref:    checkoutRef,
 		Subdir: prepared.Subdir,
 	})
-	if ok, hash, err := cachedMaterializedSkill(name, cachePath); ok || err != nil {
+	if ok, hash, err := cachedMaterializedSkillSource(name, cachePath); ok || err != nil {
 		if err != nil {
 			return "", err
 		}
 		if expectedHash != "" && hash != expectedHash {
-			return "", fmt.Errorf("skill %q source cache hash mismatch: got %s, want %s", name, hash, expectedHash)
+			return "", fmt.Errorf("git skill provider %q cache hash mismatch: got %s, want %s", name, hash, expectedHash)
 		}
 		return cachePath, nil
 	}
 
-	result, cleanup, err := fetchRemoteSkill(home, name, prepared, checkoutRef)
+	result, cleanup, err := fetchRemoteSkillSource(home, name, prepared, checkoutRef)
 	if err != nil {
 		return "", err
 	}
 	defer cleanup()
 	if lock != nil && result.ResolvedRef != lock.ResolvedRef {
-		return "", fmt.Errorf("skill %q source resolved %s, want %s", name, result.ResolvedRef, lock.ResolvedRef)
+		return "", fmt.Errorf("git skill provider %q resolved %s, want %s", name, result.ResolvedRef, lock.ResolvedRef)
 	}
 	if expectedHash != "" && result.ContentSHA256 != expectedHash {
-		return "", fmt.Errorf("skill %q source hash mismatch: got %s, want %s", name, result.ContentSHA256, expectedHash)
+		return "", fmt.Errorf("git skill provider %q hash mismatch: got %s, want %s", name, result.ContentSHA256, expectedHash)
 	}
-	return installMaterializedSkill(name, result.Path, cachePath)
+	return installMaterializedSkillSource(name, result.Path, cachePath)
 }
 
 func resolveRemoteSkillSource(home, name string, source RemoteSource) (*materializedRemoteSkill, error) {
-	prepared, err := prepareRemoteSource(name, source)
+	prepared, err := prepareRemoteSource("git skill provider", name, source)
 	if err != nil {
 		return nil, err
 	}
-	result, cleanup, err := fetchRemoteSkill(home, name, prepared, source.Ref)
+	result, cleanup, err := fetchRemoteSkillSource(home, name, prepared, source.Ref)
 	if err != nil {
 		return nil, err
 	}
@@ -83,7 +89,7 @@ func resolveRemoteSkillSource(home, name string, source RemoteSource) (*material
 		Ref:    result.ResolvedRef,
 		Subdir: prepared.Subdir,
 	})
-	cachePath, err = replaceMaterializedSkill(name, result.Path, cachePath)
+	cachePath, err = replaceMaterializedSkillSource(name, result.Path, cachePath)
 	if err != nil {
 		return nil, err
 	}
@@ -91,34 +97,56 @@ func resolveRemoteSkillSource(home, name string, source RemoteSource) (*material
 	return result, nil
 }
 
-func prepareRemoteSource(name string, source RemoteSource) (preparedRemoteSource, error) {
+func prepareRemoteSource(kind, name string, source RemoteSource) (preparedRemoteSource, error) {
 	if source.Type != "git" {
-		return preparedRemoteSource{}, fmt.Errorf("skill %q source has unsupported type %q", name, source.Type)
+		return preparedRemoteSource{}, fmt.Errorf("%s %q source has unsupported type %q", kind, name, source.Type)
 	}
 	if strings.TrimSpace(source.Ref) == "" || strings.HasPrefix(source.Ref, "-") || strings.ContainsAny(source.Ref, "\x00\r\n") {
-		return preparedRemoteSource{}, fmt.Errorf("skill %q source has invalid ref %q", name, source.Ref)
+		return preparedRemoteSource{}, fmt.Errorf("%s %q source has invalid ref %q", kind, name, source.Ref)
 	}
 	expandedURL := expandEnvRefs(source.URL)
 	if strings.TrimSpace(expandedURL) == "" {
-		return preparedRemoteSource{}, fmt.Errorf("skill %q source requires url", name)
+		return preparedRemoteSource{}, fmt.Errorf("%s %q source requires url", kind, name)
 	}
 	subdir, err := cleanRemoteSubdir(source.Subdir)
 	if err != nil {
-		return preparedRemoteSource{}, fmt.Errorf("skill %q source subdir: %w", name, err)
+		return preparedRemoteSource{}, fmt.Errorf("%s %q source subdir: %w", kind, name, err)
 	}
 	return preparedRemoteSource{ExpandedURL: expandedURL, Subdir: subdir}, nil
 }
 
-func fetchRemoteSkill(home, name string, source preparedRemoteSource, checkoutRef string) (*materializedRemoteSkill, func(), error) {
+func fetchRemoteSkillSource(home, name string, source preparedRemoteSource, checkoutRef string) (*materializedRemoteSkill, func(), error) {
+	fetched, cleanup, err := fetchRemoteSource(home, "git skill provider", name, source, checkoutRef)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := validateMaterializedSkillDirectory(name, fetched.Path); err != nil {
+		cleanup()
+		return nil, nil, err
+	}
+	contentHash, err := hashMaterializedSkillDirectory(name, fetched.Path)
+	if err != nil {
+		cleanup()
+		return nil, nil, err
+	}
+
+	return &materializedRemoteSkill{
+		Path:          fetched.Path,
+		ResolvedRef:   fetched.ResolvedRef,
+		ContentSHA256: contentHash,
+	}, cleanup, nil
+}
+
+func fetchRemoteSource(home, kind, name string, source preparedRemoteSource, checkoutRef string) (*materializedRemoteSkill, func(), error) {
 	parent := filepath.Join(home, ".kanon", "cache", "sources")
 	tmpRoot, err := os.MkdirTemp(parent, ".tmp-source-*")
 	if err != nil {
 		if mkErr := os.MkdirAll(parent, 0o755); mkErr != nil {
-			return nil, nil, fmt.Errorf("skill %q source cache: %w", name, mkErr)
+			return nil, nil, fmt.Errorf("%s %q source cache: %w", kind, name, mkErr)
 		}
 		tmpRoot, err = os.MkdirTemp(parent, ".tmp-source-*")
 		if err != nil {
-			return nil, nil, fmt.Errorf("skill %q source cache: %w", name, err)
+			return nil, nil, fmt.Errorf("%s %q source cache: %w", kind, name, err)
 		}
 	}
 	cleanup := func() {
@@ -128,16 +156,16 @@ func fetchRemoteSkill(home, name string, source preparedRemoteSource, checkoutRe
 	repoPath := filepath.Join(tmpRoot, "repo")
 	if err := runSourceGit(source.ExpandedURL, "", "clone", "--", source.ExpandedURL, repoPath); err != nil {
 		cleanup()
-		return nil, nil, fmt.Errorf("skill %q source: %w", name, err)
+		return nil, nil, fmt.Errorf("%s %q source: %w", kind, name, err)
 	}
 	if err := runSourceGit(source.ExpandedURL, repoPath, "checkout", "--detach", checkoutRef); err != nil {
 		cleanup()
-		return nil, nil, fmt.Errorf("skill %q source: %w", name, err)
+		return nil, nil, fmt.Errorf("%s %q source: %w", kind, name, err)
 	}
 	out, err := sourceGitOutput(source.ExpandedURL, repoPath, "rev-parse", "HEAD")
 	if err != nil {
 		cleanup()
-		return nil, nil, fmt.Errorf("skill %q source: %w", name, err)
+		return nil, nil, fmt.Errorf("%s %q source: %w", kind, name, err)
 	}
 	resolvedRef := strings.TrimSpace(string(out))
 
@@ -147,83 +175,80 @@ func fetchRemoteSkill(home, name string, source preparedRemoteSource, checkoutRe
 	}
 	if info, err := os.Lstat(sourcePath); err != nil {
 		cleanup()
-		return nil, nil, fmt.Errorf("skill %q source subdir %q: %w", name, source.Subdir, err)
+		return nil, nil, fmt.Errorf("%s %q source subdir %q: %w", kind, name, source.Subdir, err)
 	} else if !info.IsDir() {
 		cleanup()
-		return nil, nil, fmt.Errorf("skill %q source subdir %q is not a directory", name, source.Subdir)
+		return nil, nil, fmt.Errorf("%s %q source subdir %q is not a directory", kind, name, source.Subdir)
 	}
 	if source.Subdir == "" {
-		if err := stripGitMetadata(name, sourcePath); err != nil {
+		if err := stripGitMetadata(kind, name, sourcePath); err != nil {
 			cleanup()
 			return nil, nil, err
 		}
 	}
-	if err := validateMaterializedSkill(name, sourcePath); err != nil {
-		cleanup()
-		return nil, nil, err
-	}
-	contentHash, err := hashMaterializedSkill(name, sourcePath)
-	if err != nil {
-		cleanup()
-		return nil, nil, err
-	}
 
 	return &materializedRemoteSkill{
-		Path:          sourcePath,
-		ResolvedRef:   resolvedRef,
-		ContentSHA256: contentHash,
+		Path:        sourcePath,
+		ResolvedRef: resolvedRef,
 	}, cleanup, nil
 }
 
-func stripGitMetadata(name, root string) error {
+func stripGitMetadata(kind, name, root string) error {
 	if err := os.RemoveAll(filepath.Join(root, ".git")); err != nil {
-		return fmt.Errorf("skill %q source metadata: %w", name, err)
+		return fmt.Errorf("%s %q source metadata: %w", kind, name, err)
 	}
 	return nil
 }
 
-func cachedMaterializedSkill(name, cachePath string) (bool, string, error) {
-	if _, err := os.Stat(filepath.Join(cachePath, "SKILL.md")); err == nil {
-		if err := validateMaterializedSkill(name, cachePath); err != nil {
+func cachedMaterializedSkillSource(name, cachePath string) (bool, string, error) {
+	if _, err := os.Stat(cachePath); err == nil {
+		if err := validateMaterializedSkillDirectory(name, cachePath); err != nil {
 			return false, "", err
 		}
-		hash, err := hashMaterializedSkill(name, cachePath)
+		hash, err := hashMaterializedSkillDirectory(name, cachePath)
 		if err != nil {
 			return false, "", err
 		}
 		return true, hash, nil
 	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return false, "", fmt.Errorf("skill %q source cache: %w", name, err)
+		return false, "", fmt.Errorf("git skill provider %q cache: %w", name, err)
 	}
 	return false, "", nil
 }
 
-func installMaterializedSkill(name, sourcePath, cachePath string) (string, error) {
-	return installMaterializedSkillMode(name, sourcePath, cachePath, false)
+func installMaterializedSkillSource(name, sourcePath, cachePath string) (string, error) {
+	return installMaterializedSourceMode("git skill provider", name, sourcePath, cachePath, false, cachedMaterializedSkillSource)
 }
 
-func replaceMaterializedSkill(name, sourcePath, cachePath string) (string, error) {
-	return installMaterializedSkillMode(name, sourcePath, cachePath, true)
+func replaceMaterializedSkillSource(name, sourcePath, cachePath string) (string, error) {
+	return installMaterializedSourceMode("git skill provider", name, sourcePath, cachePath, true, cachedMaterializedSkillSource)
 }
 
-func installMaterializedSkillMode(name, sourcePath, cachePath string, replace bool) (string, error) {
+func installMaterializedSourceMode(
+	kind,
+	name,
+	sourcePath,
+	cachePath string,
+	replace bool,
+	cached func(string, string) (bool, string, error),
+) (string, error) {
 	parent := filepath.Dir(cachePath)
 	if err := os.MkdirAll(parent, 0o755); err != nil {
-		return "", fmt.Errorf("skill %q source cache: %w", name, err)
+		return "", fmt.Errorf("%s %q source cache: %w", kind, name, err)
 	}
 	if replace {
 		if err := os.RemoveAll(cachePath); err != nil {
-			return "", fmt.Errorf("skill %q source cache: %w", name, err)
+			return "", fmt.Errorf("%s %q source cache: %w", kind, name, err)
 		}
 	}
 	if err := os.Rename(sourcePath, cachePath); err != nil {
-		if ok, _, cacheErr := cachedMaterializedSkill(name, cachePath); ok || cacheErr != nil {
+		if ok, _, cacheErr := cached(name, cachePath); ok || cacheErr != nil {
 			if cacheErr != nil {
 				return "", cacheErr
 			}
 			return cachePath, nil
 		}
-		return "", fmt.Errorf("skill %q source cache: %w", name, err)
+		return "", fmt.Errorf("%s %q source cache: %w", kind, name, err)
 	}
 	return cachePath, nil
 }
@@ -279,6 +304,23 @@ func hashMaterializedSkill(name, root string) (string, error) {
 	return "sha256:" + hex.EncodeToString(hash.Sum(nil)), nil
 }
 
+func hashMaterializedSkillDirectory(name, root string) (string, error) {
+	items, err := materializedSkillDirectoryItems(name, root)
+	if err != nil {
+		return "", err
+	}
+	hash := sha256.New()
+	for _, item := range items {
+		itemHash, err := hashMaterializedSkill(item.Name, item.Path)
+		if err != nil {
+			return "", err
+		}
+		writeHashField(hash, []byte(item.Name))
+		writeHashField(hash, []byte(itemHash))
+	}
+	return "sha256:" + hex.EncodeToString(hash.Sum(nil)), nil
+}
+
 func writeHashField(hash interface{ Write([]byte) (int, error) }, data []byte) {
 	var length [8]byte
 	binary.BigEndian.PutUint64(length[:], uint64(len(data)))
@@ -317,6 +359,51 @@ func validateMaterializedSkill(name, root string) error {
 		}
 		return nil
 	})
+}
+
+func validateMaterializedSkillDirectory(name, root string) error {
+	_, err := materializedSkillDirectoryItems(name, root)
+	return err
+}
+
+func materializedSkillDirectoryItems(name, root string) ([]materializedSkillDirectoryItem, error) {
+	info, err := os.Lstat(root)
+	if err != nil {
+		return nil, fmt.Errorf("git skill provider %q: %w", name, err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return nil, fmt.Errorf("git skill provider %q root is a symlink", name)
+	}
+	if !info.IsDir() {
+		return nil, fmt.Errorf("git skill provider %q root is not a directory", name)
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return nil, fmt.Errorf("git skill provider %q: %w", name, err)
+	}
+	var items []materializedSkillDirectoryItem
+	for _, entry := range entries {
+		entryName := entry.Name()
+		if strings.HasPrefix(entryName, ".") {
+			continue
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			return nil, fmt.Errorf("git skill provider %q contains symlink %q", name, entryName)
+		}
+		if !entry.IsDir() {
+			continue
+		}
+		path := filepath.Join(root, entryName)
+		if err := validateMaterializedSkill(entryName, path); err != nil {
+			return nil, fmt.Errorf("git skill provider %q child %q: %w", name, entryName, err)
+		}
+		items = append(items, materializedSkillDirectoryItem{Name: entryName, Path: path})
+	}
+	if len(items) == 0 {
+		return nil, fmt.Errorf("git skill provider %q contains no skill directories", name)
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].Name < items[j].Name })
+	return items, nil
 }
 
 func remoteSourceCachePath(home string, source RemoteSource) string {

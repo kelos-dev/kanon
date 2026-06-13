@@ -3,6 +3,7 @@ package core
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/pelletier/go-toml/v2"
+	"gopkg.in/yaml.v3"
 )
 
 func RenderAll(cfg *Config, opts TargetOptions) ([]RenderedFile, error) {
@@ -85,78 +87,269 @@ func readInstruction(home string, paths []string) ([]byte, error) {
 
 func renderSkills(cfg *Config, opts TargetOptions, agent, targetRoot string) ([]RenderedFile, error) {
 	var files []RenderedFile
+	rendered := map[string]string{}
+	localOverrides := map[string]Skill{}
+	claimedLocalNames := map[string]bool{}
 	for _, skill := range cfg.Skills {
+		if skill.Git != nil {
+			continue
+		}
+		name, err := skillEntryName(skill)
+		if err != nil {
+			return nil, err
+		}
+		if name == "" {
+			if !enabled(skill.Enabled) {
+				continue
+			}
+			return nil, fmt.Errorf("skill name cannot be empty")
+		}
+		claimedLocalNames[name] = true
+		localOverrides[name] = skill
+	}
+	localItems, err := localSkillDirectoryItems(opts.KanonHome)
+	if err != nil {
+		return nil, err
+	}
+	for _, item := range localItems {
+		skill := localOverrides[item.Name]
+		name, err := skillEntryName(skill)
+		if err != nil {
+			return nil, err
+		}
+		if name == "" && !claimedLocalNames[item.Name] {
+			name = item.Name
+		}
+		if name == "" {
+			continue
+		}
+		delete(localOverrides, item.Name)
 		if !enabled(skill.Enabled) || !HasTarget(skill.Targets, agent) {
 			continue
 		}
-		name := skill.Name
-		if strings.TrimSpace(name) == "" {
-			return nil, fmt.Errorf("skill name cannot be empty")
+		source := item.Path
+		if skill.Path != "" {
+			source = ResolvePath(opts.KanonHome, skill.Path)
 		}
-		source, err := skillSourcePath(opts.KanonHome, name, skill, opts.SourceLock)
+		if err := renderSkillDirectory(&files, rendered, agent, targetRoot, item.Name, source, fmt.Sprintf("skill %q", item.Name), ""); err != nil {
+			return nil, err
+		}
+	}
+	localNames := make([]string, 0, len(localOverrides))
+	for name := range localOverrides {
+		localNames = append(localNames, name)
+	}
+	sort.Strings(localNames)
+	for _, name := range localNames {
+		skill := localOverrides[name]
+		if !enabled(skill.Enabled) || !HasTarget(skill.Targets, agent) {
+			continue
+		}
+		source := localSkillSourcePath(opts.KanonHome, name, skill)
+		if err := renderSkillDirectory(&files, rendered, agent, targetRoot, name, source, fmt.Sprintf("skill %q", name), ""); err != nil {
+			return nil, err
+		}
+	}
+	for _, skill := range cfg.Skills {
+		if skill.Git == nil {
+			continue
+		}
+		if !enabled(skill.Enabled) || !HasTarget(skill.Targets, agent) {
+			continue
+		}
+		name, err := gitSkillProviderName(skill)
+		if err != nil {
+			return nil, fmt.Errorf("git skill provider: %w", err)
+		}
+		sourcePath, err := remoteSkillProviderPath(opts.KanonHome, name, *skill.Git, opts.SourceLock)
 		if err != nil {
 			return nil, err
 		}
-		info, err := os.Stat(source)
+		items, err := selectedSkillDirectoryItems(name, sourcePath, skill.Include, skill.Exclude)
 		if err != nil {
 			return nil, err
 		}
-		if !info.IsDir() {
-			return nil, fmt.Errorf("skill %q path must be a directory", name)
-		}
-		err = filepath.WalkDir(source, func(path string, entry fs.DirEntry, err error) error {
-			if err != nil {
-				return err
+		owner := fmt.Sprintf("git skill provider %q", name)
+		for _, item := range items {
+			renderName := namespacedSkillName(name, item.Name)
+			if err := renderSkillDirectory(&files, rendered, agent, targetRoot, renderName, item.Path, owner, renderName); err != nil {
+				return nil, err
 			}
-			if entry.IsDir() {
-				if entry.Name() == ".git" {
-					return filepath.SkipDir
-				}
-				return nil
-			}
-			rel, err := filepath.Rel(source, path)
-			if err != nil {
-				return err
-			}
-			data, err := os.ReadFile(path)
-			if err != nil {
-				return err
-			}
-			info, err := entry.Info()
-			if err != nil {
-				return err
-			}
-			files = append(files, RenderedFile{
-				Agent:   agent,
-				Path:    filepath.Join(targetRoot, name, rel),
-				Content: data,
-				Mode:    info.Mode().Perm(),
-			})
-			return nil
-		})
-		if err != nil {
-			return nil, err
 		}
 	}
 	return files, nil
 }
 
-func skillSourcePath(home, name string, skill Skill, lock *SourceLock) (string, error) {
-	if skill.Source != nil {
-		var lockedEntry *SourceLockEntry
-		if entry, ok := sourceLockEntry(lock, remoteSkillSourceOwner(name)); ok {
-			if err := entryMatchesRemoteSource(entry, *skill.Source); err != nil {
-				return "", err
-			}
-			lockedEntry = &entry
-		}
-		return materializeRemoteSkill(home, name, *skill.Source, lockedEntry)
+func renderSkillDirectory(files *[]RenderedFile, rendered map[string]string, agent, targetRoot, name, source, owner, frontmatterName string) error {
+	if existing, ok := rendered[name]; ok {
+		return fmt.Errorf("skill %q from %s duplicates %s", name, owner, existing)
 	}
+	rendered[name] = owner
+	info, err := os.Stat(source)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("skill %q path must be a directory", name)
+	}
+	err = filepath.WalkDir(source, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			if entry.Name() == ".git" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		rel, err := filepath.Rel(source, path)
+		if err != nil {
+			return err
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if rel == "SKILL.md" && frontmatterName != "" {
+			data, err = rewriteSkillFrontmatterName(data, frontmatterName)
+			if err != nil {
+				return fmt.Errorf("skill %q SKILL.md: %w", name, err)
+			}
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		*files = append(*files, RenderedFile{
+			Agent:   agent,
+			Path:    filepath.Join(targetRoot, name, rel),
+			Content: data,
+			Mode:    info.Mode().Perm(),
+		})
+		return nil
+	})
+	return err
+}
+
+func rewriteSkillFrontmatterName(data []byte, name string) ([]byte, error) {
+	text := string(data)
+	lines := strings.SplitAfter(text, "\n")
+	if len(lines) == 0 || strings.TrimSpace(lines[0]) != "---" {
+		return nil, errors.New("missing YAML frontmatter")
+	}
+	offset := len(lines[0])
+	for i := 1; i < len(lines); i++ {
+		line := strings.TrimSpace(lines[i])
+		if line != "---" && line != "..." {
+			offset += len(lines[i])
+			continue
+		}
+		var frontmatter map[string]any
+		if err := yaml.Unmarshal([]byte(text[len(lines[0]):offset]), &frontmatter); err != nil {
+			return nil, err
+		}
+		if frontmatter == nil {
+			frontmatter = map[string]any{}
+		}
+		frontmatter["name"] = name
+		encoded, err := yaml.Marshal(frontmatter)
+		if err != nil {
+			return nil, err
+		}
+		body := text[offset+len(lines[i]):]
+		return []byte("---\n" + string(encoded) + "---\n" + body), nil
+	}
+	return nil, errors.New("unterminated YAML frontmatter")
+}
+
+func localSkillSourcePath(home, name string, skill Skill) string {
 	source := skill.Path
 	if source == "" {
 		source = filepath.Join("skills", name)
 	}
-	return ResolvePath(home, source), nil
+	return ResolvePath(home, source)
+}
+
+func remoteSkillProviderPath(home, id string, git GitSkill, lock *SourceLock) (string, error) {
+	remote := gitSkillToRemoteSource(git)
+	var lockedEntry *SourceLockEntry
+	if entry, ok := sourceLockEntry(lock, gitSkillSourceOwner(id)); ok {
+		if err := entryMatchesRemoteSource(entry, remote); err != nil {
+			return "", err
+		}
+		lockedEntry = &entry
+	}
+	return materializeRemoteSkillSource(home, id, remote, lockedEntry)
+}
+
+func namespacedSkillName(providerID, skillName string) string {
+	return providerID + ":" + skillName
+}
+
+func localSkillDirectoryItems(home string) ([]materializedSkillDirectoryItem, error) {
+	root := filepath.Join(home, "skills")
+	entries, err := os.ReadDir(root)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("local skills: %w", err)
+	}
+	var items []materializedSkillDirectoryItem
+	for _, entry := range entries {
+		name := entry.Name()
+		if strings.HasPrefix(name, ".") || !entry.IsDir() {
+			continue
+		}
+		path := filepath.Join(root, name)
+		if _, err := os.Stat(filepath.Join(path, "SKILL.md")); errors.Is(err, os.ErrNotExist) {
+			continue
+		} else if err != nil {
+			return nil, fmt.Errorf("skill %q: %w", name, err)
+		}
+		items = append(items, materializedSkillDirectoryItem{Name: name, Path: path})
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].Name < items[j].Name })
+	return items, nil
+}
+
+func selectedSkillDirectoryItems(sourceName, root string, include, exclude []string) ([]materializedSkillDirectoryItem, error) {
+	items, err := materializedSkillDirectoryItems(sourceName, root)
+	if err != nil {
+		return nil, err
+	}
+	byName := map[string]materializedSkillDirectoryItem{}
+	for _, item := range items {
+		byName[item.Name] = item
+	}
+	excluded := map[string]bool{}
+	for _, skillName := range exclude {
+		if _, ok := byName[skillName]; !ok {
+			return nil, fmt.Errorf("git skill provider %q references unknown excluded skill %q", sourceName, skillName)
+		}
+		excluded[skillName] = true
+	}
+	if len(include) == 0 {
+		var selected []materializedSkillDirectoryItem
+		for _, item := range items {
+			if !excluded[item.Name] {
+				selected = append(selected, item)
+			}
+		}
+		return selected, nil
+	}
+	selected := make([]materializedSkillDirectoryItem, 0, len(include))
+	for _, skillName := range include {
+		item, ok := byName[skillName]
+		if !ok {
+			return nil, fmt.Errorf("git skill provider %q references unknown included skill %q", sourceName, skillName)
+		}
+		if excluded[skillName] {
+			continue
+		}
+		selected = append(selected, item)
+	}
+	return selected, nil
 }
 
 func hooksForAgent(cfg *Config, agent string) map[string]any {

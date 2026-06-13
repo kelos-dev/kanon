@@ -208,7 +208,15 @@ func addSkillTarget(cfg *Config, name, target string) {
 			if !slices.Contains(cfg.Skills[i].Targets, target) {
 				cfg.Skills[i].Targets = append(cfg.Skills[i].Targets, target)
 			}
+			cfg.Skills[i].Targets = normalizeImportedSkillTargets(cfg.Skills[i].Targets)
 			return
 		}
 	}
+}
+
+func normalizeImportedSkillTargets(targets []string) []string {
+	if slices.Contains(targets, AgentCodex) && slices.Contains(targets, AgentClaude) {
+		return nil
+	}
+	return targets
 }

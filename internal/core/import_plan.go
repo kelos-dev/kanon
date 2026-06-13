@@ -19,6 +19,7 @@ type ImportUnit struct {
 	Agent  string
 	Config Config
 	Files  map[string][]byte
+	Skill  *Skill
 }
 
 type importUnitPreview struct {
@@ -105,6 +106,7 @@ func WriteSelectedImport(plan *ImportPlan, selected map[string]bool, home string
 			files = append(files, importFile{rel: rel, data: data})
 		}
 	}
+	compactImplicitLocalSkills(cfg)
 	sort.Slice(files, func(i, j int) bool { return files[i].rel < files[j].rel })
 	for _, file := range files {
 		path := ResolvePath(home, file.rel)
@@ -155,11 +157,15 @@ func buildImportUnits(home string, result *ImportResult) ([]ImportUnit, error) {
 			path = filepath.Join("skills", skill.Name)
 		}
 		files := selectFilesUnder(result.Files, path)
+		config := Config{Version: 1}
+		config.Skills = []Skill{skill}
+		previewSkill := skill
 		units = append(units, ImportUnit{
 			Path:   unitPath(home, filepath.Join(path, "SKILL.md")),
 			Agent:  importTargetsAgent(skill.Targets),
-			Config: Config{Version: 1, Skills: []Skill{skill}},
+			Config: config,
 			Files:  files,
+			Skill:  &previewSkill,
 		})
 	}
 	if len(result.Config.MCP.Servers) > 0 {
@@ -200,7 +206,7 @@ func importUnitPreviewData(home string, base *Config, unit ImportUnit, desired b
 	if desired {
 		cfg := existingImportUnitConfig(base, unit.Config)
 		mergeImportUnitConfig(&cfg, unit.Config)
-		return marshalImportUnitPreview(cfg, unit.Files)
+		return marshalImportUnitPreview(cfg, unit.Files, importUnitPreviewSkill(cfg, unit.Skill))
 	}
 	existing := existingImportUnitConfig(base, unit.Config)
 	files := map[string][]byte{}
@@ -216,16 +222,19 @@ func importUnitPreviewData(home string, base *Config, unit ImportUnit, desired b
 	if isEmptyImportUnitConfig(existing) && len(files) == 0 {
 		return nil, nil
 	}
-	return marshalImportUnitPreview(existing, files)
+	return marshalImportUnitPreview(existing, files, existingImportUnitPreviewSkill(existing, files, unit.Skill))
 }
 
-func marshalImportUnitPreview(cfg Config, files map[string][]byte) ([]byte, error) {
+func marshalImportUnitPreview(cfg Config, files map[string][]byte, previewSkill *Skill) ([]byte, error) {
 	preview := importUnitPreview{Files: stringFiles(files)}
 	if len(cfg.Instructions.Files) > 0 {
 		preview.Kind = "instructions"
 		preview.Instructions = cfg.Instructions.Files
 	}
-	if len(cfg.Skills) > 0 {
+	if previewSkill != nil {
+		preview.Kind = "skill"
+		preview.Skill = previewSkill
+	} else if len(cfg.Skills) > 0 {
 		preview.Kind = "skill"
 		skill := cfg.Skills[0]
 		preview.Skill = &skill
@@ -240,6 +249,28 @@ func marshalImportUnitPreview(cfg Config, files map[string][]byte) ([]byte, erro
 		preview.Hook = &hook
 	}
 	return yamlMarshal(preview)
+}
+
+func existingImportUnitPreviewSkill(existing Config, files map[string][]byte, imported *Skill) *Skill {
+	if imported == nil {
+		return nil
+	}
+	if skill := importUnitPreviewSkill(existing, nil); skill != nil {
+		return skill
+	}
+	if len(files) > 0 {
+		skill := *imported
+		return &skill
+	}
+	return nil
+}
+
+func importUnitPreviewSkill(cfg Config, fallback *Skill) *Skill {
+	if len(cfg.Skills) > 0 {
+		skill := cfg.Skills[0]
+		return &skill
+	}
+	return fallback
 }
 
 func existingImportUnitConfig(base *Config, unit Config) Config {

@@ -204,8 +204,8 @@ func TestStatusReportsRemoteSkillMaterializationErrors(t *testing.T) {
 	if err := core.WriteConfig(filepath.Join(home, "kanon.yaml"), &core.Config{
 		Version: 1,
 		Skills: []core.Skill{{
-			Name:   "broken",
-			Source: &core.RemoteSource{Type: "git", URL: repo, Ref: ref},
+			Name: "broken",
+			Git:  &core.GitSkill{URL: repo, Ref: ref},
 		}},
 	}); err != nil {
 		t.Fatal(err)
@@ -220,7 +220,7 @@ func TestStatusReportsRemoteSkillMaterializationErrors(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected status to report remote materialization error\n%s", out.String())
 	}
-	if !strings.Contains(err.Error(), `skill "broken" source missing SKILL.md`) {
+	if !strings.Contains(err.Error(), `git skill provider "broken" contains no skill directories`) {
 		t.Fatalf("unexpected status error: %v\n%s", err, out.String())
 	}
 }
@@ -247,7 +247,7 @@ func TestLockCommandWritesLockfile(t *testing.T) {
 		t.Fatalf("expected one lock entry, got %#v", lock.Sources)
 	}
 	entry := lock.Sources[0]
-	if entry.Owner != "skill.remote-review" {
+	if entry.Owner != "skill.git.remote-review" {
 		t.Fatalf("unexpected owner %q", entry.Owner)
 	}
 	if entry.URL != repo {
@@ -262,7 +262,7 @@ func TestLockCommandWritesLockfile(t *testing.T) {
 	if !strings.HasPrefix(entry.ContentSHA256, "sha256:") {
 		t.Fatalf("lock did not record content hash: %#v", entry)
 	}
-	if !strings.Contains(out.String(), "Locked 1 remote skill source(s)") {
+	if !strings.Contains(out.String(), "Locked 1 git skill provider(s)") {
 		t.Fatalf("unexpected output: %s", out.String())
 	}
 	checkOut := runKanon(t, home, "lock", "check")
@@ -435,7 +435,7 @@ func newRemoteSkillRepo(t *testing.T, content string) (string, string) {
 
 func commitRemoteSkill(t *testing.T, repo, content string) string {
 	t.Helper()
-	writeFile(t, filepath.Join(repo, "SKILL.md"), "# Remote Review\n\n"+content)
+	writeFile(t, filepath.Join(repo, "remote-review", "SKILL.md"), "---\nname: remote-review\ndescription: Test remote review skill.\n---\n\n"+content)
 	gitRun(t, repo, "add", ".")
 	gitRun(t, repo, "commit", "-m", "update skill")
 	return strings.TrimSpace(string(gitOutput(t, repo, "rev-parse", "HEAD")))
@@ -446,8 +446,7 @@ func writeRemoteSkillConfig(t *testing.T, home, repo, ref string) {
 	writeFile(t, filepath.Join(home, "kanon.yaml"), fmt.Sprintf(`version: 1
 skills:
   - name: remote-review
-    source:
-      type: git
+    git:
       url: %s
       ref: %s
 `, repo, ref))
