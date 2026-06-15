@@ -28,6 +28,7 @@ type options struct {
 	gitInit           bool
 	secretPolicy      string
 	instructionPolicy string
+	overlayPath       string
 }
 
 func NewRootCommand() *cobra.Command {
@@ -56,6 +57,7 @@ skill pins, and pull/push/update to sync the source with a remote.`,
 	cmd.PersistentFlags().StringVar(&opts.home, "home", "", "Kanon source repository path (defaults to KANON_HOME or ~/.config/kanon)")
 	cmd.PersistentFlags().StringVar(&opts.configPath, "config", "", "config file path (defaults to <home>/kanon.yaml)")
 	cmd.PersistentFlags().StringVar(&opts.project, "project", "", "render project-scoped agent settings into this repository")
+	cmd.PersistentFlags().StringVar(&opts.overlayPath, "overlay", "", "project overlay config path (defaults to <project>/.kanon/kanon.yaml when present)")
 	cmd.PersistentFlags().StringVar(&opts.agent, "agent", core.AgentAll, "agent to manage: all, codex, or claude")
 
 	cmd.AddCommand(initCommand(opts))
@@ -535,7 +537,42 @@ func (opts *options) loadConfig() (*core.Config, string, error) {
 		return nil, "", err
 	}
 	cfg, _, err := core.LoadConfig(home, opts.configPath)
-	return cfg, home, err
+	if err != nil {
+		return nil, "", err
+	}
+	overlay, err := opts.resolvedOverlayPath()
+	if err != nil {
+		return nil, "", err
+	}
+	if overlay != "" {
+		overlayCfg, _, err := core.LoadConfigOverlay(overlay)
+		if err != nil {
+			return nil, "", err
+		}
+		cfg = core.MergeConfigOverlay(cfg, overlayCfg)
+	}
+	return cfg, home, nil
+}
+
+func (opts *options) resolvedOverlayPath() (string, error) {
+	if opts.overlayPath != "" {
+		overlay := core.ResolvePath("", opts.overlayPath)
+		return filepath.Abs(overlay)
+	}
+	project := opts.project
+	if project == "" {
+		return "", nil
+	}
+	var err error
+	project, err = filepath.Abs(project)
+	if err != nil {
+		return "", err
+	}
+	overlay := filepath.Join(project, ".kanon", "kanon.yaml")
+	if _, err := os.Stat(overlay); err != nil {
+		return "", nil
+	}
+	return overlay, nil
 }
 
 func (opts *options) targetOptions() (core.TargetOptions, error) {

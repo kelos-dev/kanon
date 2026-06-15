@@ -388,6 +388,62 @@ func TestLockRejectsLiteralCredentials(t *testing.T) {
 	}
 }
 
+func TestRenderMergesExplicitOverlay(t *testing.T) {
+	home := t.TempDir()
+	if err := core.InitHome(core.InitOptions{Home: home}); err != nil {
+		t.Fatal(err)
+	}
+
+	project := t.TempDir()
+	overlayDir := filepath.Join(project, ".kanon")
+	if err := os.MkdirAll(overlayDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(overlayDir, "extra.md"), "Project-specific rule\n")
+	writeFile(t, filepath.Join(overlayDir, "kanon.yaml"),
+		"version: 1\ninstructions:\n  files:\n    - extra.md\n")
+
+	out := runKanon(t, home, "--overlay", filepath.Join(overlayDir, "kanon.yaml"), "render")
+	if !strings.Contains(out, "Project-specific rule") {
+		t.Errorf("render output missing overlay instruction content\n%s", out)
+	}
+}
+
+func TestRenderAutoDetectsProjectOverlay(t *testing.T) {
+	home := t.TempDir()
+	if err := core.InitHome(core.InitOptions{Home: home}); err != nil {
+		t.Fatal(err)
+	}
+
+	project := t.TempDir()
+	overlayDir := filepath.Join(project, ".kanon")
+	if err := os.MkdirAll(overlayDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(overlayDir, "proj.md"), "Auto-detected project rule\n")
+	writeFile(t, filepath.Join(overlayDir, "kanon.yaml"),
+		"version: 1\ninstructions:\n  files:\n    - proj.md\n")
+
+	out := runKanon(t, home, "--project", project, "render")
+	if !strings.Contains(out, "Auto-detected project rule") {
+		t.Errorf("render output missing auto-detected overlay content\n%s", out)
+	}
+}
+
+func TestRenderNoOverlayWhenProjectLacksKanonDir(t *testing.T) {
+	home := t.TempDir()
+	if err := core.InitHome(core.InitOptions{Home: home}); err != nil {
+		t.Fatal(err)
+	}
+	project := t.TempDir()
+
+	// should succeed without any overlay
+	out := runKanon(t, home, "--project", project, "render")
+	if !strings.Contains(out, "Shared Agent Instructions") {
+		t.Errorf("render missing base content\n%s", out)
+	}
+}
+
 func gitRun(t *testing.T, dir string, args ...string) {
 	t.Helper()
 	if dir != "" {
