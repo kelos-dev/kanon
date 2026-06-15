@@ -49,6 +49,96 @@ func LoadConfig(home, configPath string) (*Config, string, error) {
 	return &cfg, configPath, nil
 }
 
+func LoadConfigOverlay(path string) (*Config, string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, "", err
+	}
+	var cfg Config
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return nil, "", err
+	}
+	if cfg.Version == 0 {
+		cfg.Version = 1
+	}
+	root := filepath.Dir(path)
+	RebaseConfigPaths(&cfg, root)
+	return &cfg, root, nil
+}
+
+func RebaseConfigPaths(cfg *Config, root string) {
+	if cfg == nil || root == "" {
+		return
+	}
+	for i, rel := range cfg.Instructions.Files {
+		cfg.Instructions.Files[i] = rebaseConfigPath(root, rel)
+	}
+	for i := range cfg.Skills {
+		if cfg.Skills[i].Path != "" {
+			cfg.Skills[i].Path = rebaseConfigPath(root, cfg.Skills[i].Path)
+		} else if cfg.Skills[i].Name != "" {
+			cfg.Skills[i].Path = filepath.Join(root, "skills", cfg.Skills[i].Name)
+		}
+	}
+}
+
+func MergeConfigOverlay(base, overlay *Config) *Config {
+	if base == nil {
+		return overlay
+	}
+	if overlay == nil {
+		return base
+	}
+	if overlay.Version != 0 {
+		base.Version = overlay.Version
+	}
+	base.Instructions.Files = append(base.Instructions.Files, overlay.Instructions.Files...)
+	base.Skills = mergeSkills(base.Skills, overlay.Skills)
+	if base.MCP.Servers == nil && len(overlay.MCP.Servers) > 0 {
+		base.MCP.Servers = map[string]MCPServer{}
+	}
+	for name, server := range overlay.MCP.Servers {
+		base.MCP.Servers[name] = server
+	}
+	base.Hooks = append(base.Hooks, overlay.Hooks...)
+	if base.Metadata == nil && len(overlay.Metadata) > 0 {
+		base.Metadata = map[string]string{}
+	}
+	for key, value := range overlay.Metadata {
+		base.Metadata[key] = value
+	}
+	return base
+}
+
+func rebaseConfigPath(root, value string) string {
+	if strings.TrimSpace(value) == "" || strings.HasPrefix(value, "~/") || value == "~" || filepath.IsAbs(value) {
+		return value
+	}
+	return filepath.Join(root, value)
+}
+
+func mergeSkills(base, overlay []Skill) []Skill {
+	if len(overlay) == 0 {
+		return base
+	}
+	out := append([]Skill{}, base...)
+	index := map[string]int{}
+	for i, skill := range out {
+		if skill.Name != "" {
+			index[skill.Name] = i
+		}
+	}
+	for _, skill := range overlay {
+		if i, ok := index[skill.Name]; ok {
+			out[i] = skill
+		} else {
+			out = append(out, skill)
+			index[skill.Name] = len(out) - 1
+		}
+	}
+	return out
+}
+
 func WriteConfig(path string, cfg *Config) error {
 	data, err := yamlMarshal(cfg)
 	if err != nil {
