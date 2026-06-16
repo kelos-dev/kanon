@@ -11,7 +11,10 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-var envRefPattern = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)(:-([^}]*))?\}`)
+var (
+	envRefPattern            = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)(:-([^}]*))?\}`)
+	skillProviderNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
+)
 
 func DefaultHome() (string, error) {
 	if value := os.Getenv("KANON_HOME"); value != "" {
@@ -75,26 +78,55 @@ func ValidateConfig(cfg *Config, home string) []error {
 			errs = append(errs, fmt.Errorf("instruction %q: %w", rel, err))
 		}
 	}
+	gitSkillProviderNames := map[string]bool{}
 	for _, skill := range cfg.Skills {
 		if !enabled(skill.Enabled) {
 			continue
 		}
-		if strings.TrimSpace(skill.Name) == "" {
+		name, nameErr := skillEntryName(skill)
+		if nameErr != nil {
+			errs = append(errs, nameErr)
+			continue
+		}
+		if skill.Git != nil {
+			label := gitSkillProviderLabel(skill)
+			if skill.Path != "" {
+				errs = append(errs, errors.New("git skill provider cannot be used with path"))
+			}
+			validateTargets(label, skill.Targets, &errs)
+			if _, err := gitSkillProviderName(skill); err != nil {
+				errs = append(errs, fmt.Errorf("%s %w", label, err))
+			}
+			validateGitSkill(label, skill.Git, &errs)
+			validateSkillSelection(label, skill.Include, skill.Exclude, &errs)
+			if skill.Git != nil {
+				if providerName, err := gitSkillProviderName(skill); err == nil {
+					if gitSkillProviderNames[providerName] {
+						errs = append(errs, fmt.Errorf("git skill provider %q is duplicated", providerName))
+					}
+					gitSkillProviderNames[providerName] = true
+				}
+			}
+			continue
+		}
+		if name == "" {
 			errs = append(errs, errors.New("skill name cannot be empty"))
 			continue
 		}
-		validateTargets(fmt.Sprintf("skill %q", skill.Name), skill.Targets, &errs)
-		if skill.Source != nil {
-			validateRemoteSource(fmt.Sprintf("skill %q source", skill.Name), *skill.Source, skill.Path, &errs)
-			continue
+		if len(skill.Include) > 0 {
+			errs = append(errs, fmt.Errorf("skill %q cannot use include without git", name))
 		}
+		if len(skill.Exclude) > 0 {
+			errs = append(errs, fmt.Errorf("skill %q cannot use exclude without git", name))
+		}
+		validateTargets(fmt.Sprintf("skill %q", name), skill.Targets, &errs)
 		path := skill.Path
 		if path == "" {
-			path = filepath.Join("skills", skill.Name)
+			path = filepath.Join("skills", name)
 		}
 		skillFile := filepath.Join(ResolvePath(home, path), "SKILL.md")
 		if _, err := os.Stat(skillFile); err != nil {
-			errs = append(errs, fmt.Errorf("skill %q: %w", skill.Name, err))
+			errs = append(errs, fmt.Errorf("skill %q: %w", name, err))
 		}
 	}
 	for name, server := range cfg.MCP.Servers {
@@ -119,23 +151,106 @@ func ValidateConfig(cfg *Config, home string) []error {
 	return errs
 }
 
-func validateRemoteSource(label string, source RemoteSource, path string, errs *[]error) {
-	if path != "" {
-		*errs = append(*errs, fmt.Errorf("%s cannot be used with path", label))
+func gitSkillProviderLabel(skill Skill) string {
+	if skill.Git != nil {
+		if name, err := gitSkillProviderName(skill); err == nil {
+			return fmt.Sprintf("git skill provider %q", name)
+		}
+		if name := strings.TrimSpace(skill.Name); name != "" {
+			return fmt.Sprintf("git skill provider %q", name)
+		}
 	}
-	if source.Type != "git" {
-		*errs = append(*errs, fmt.Errorf("%s has unsupported type %q", label, source.Type))
+	return "git skill provider"
+}
+
+func validateGitSkill(label string, git *GitSkill, errs *[]error) {
+	if git == nil {
+		*errs = append(*errs, fmt.Errorf("%s is required", label))
+		return
 	}
-	if strings.TrimSpace(source.URL) == "" {
+	if strings.TrimSpace(git.URL) == "" {
 		*errs = append(*errs, fmt.Errorf("%s requires url", label))
 	}
-	if strings.TrimSpace(source.Ref) == "" {
+	if strings.TrimSpace(git.Ref) == "" {
 		*errs = append(*errs, fmt.Errorf("%s requires ref", label))
-	} else if strings.HasPrefix(source.Ref, "-") || strings.ContainsAny(source.Ref, "\x00\r\n") {
-		*errs = append(*errs, fmt.Errorf("%s has invalid ref %q", label, source.Ref))
+	} else if strings.HasPrefix(git.Ref, "-") || strings.ContainsAny(git.Ref, "\x00\r\n") {
+		*errs = append(*errs, fmt.Errorf("%s has invalid ref %q", label, git.Ref))
 	}
-	if _, err := cleanRemoteSubdir(source.Subdir); err != nil {
-		*errs = append(*errs, fmt.Errorf("%s has invalid subdir %q: %w", label, source.Subdir, err))
+	if _, err := cleanRemoteSubdir(git.Subdir); err != nil {
+		*errs = append(*errs, fmt.Errorf("%s has invalid subdir %q: %w", label, git.Subdir, err))
+	}
+}
+
+func skillEntryName(skill Skill) (string, error) {
+	return strings.TrimSpace(skill.Name), nil
+}
+
+func gitSkillProviderName(skill Skill) (string, error) {
+	if skill.Git == nil {
+		return "", errors.New("requires git")
+	}
+	name, err := skillEntryName(skill)
+	if err != nil {
+		return "", err
+	}
+	if name == "" {
+		name = deriveGitSkillProviderName(skill.Git.URL)
+		if name == "" {
+			return "", errors.New("requires name or a git url with a repository name")
+		}
+	}
+	if !skillProviderNamePattern.MatchString(name) {
+		return "", fmt.Errorf("has invalid name %q", name)
+	}
+	return name, nil
+}
+
+func deriveGitSkillProviderName(rawURL string) string {
+	value := strings.TrimSpace(expandEnvRefs(rawURL))
+	if value == "" {
+		return ""
+	}
+	if i := strings.IndexAny(value, "?#"); i >= 0 {
+		value = value[:i]
+	}
+	value = strings.TrimRight(value, "/")
+	if value == "" {
+		return ""
+	}
+	if i := strings.LastIndex(value, "/"); i >= 0 {
+		value = value[i+1:]
+	} else if i := strings.LastIndex(value, ":"); i >= 0 {
+		value = value[i+1:]
+	}
+	value = strings.TrimSuffix(value, ".git")
+	return strings.TrimSpace(value)
+}
+
+func validateSkillSelection(label string, include, exclude []string, errs *[]error) {
+	includeSet := map[string]bool{}
+	for _, name := range include {
+		if strings.TrimSpace(name) == "" {
+			*errs = append(*errs, fmt.Errorf("%s include cannot contain an empty skill name", label))
+			continue
+		}
+		if includeSet[name] {
+			*errs = append(*errs, fmt.Errorf("%s include has duplicate skill %q", label, name))
+		}
+		includeSet[name] = true
+	}
+	excludeSet := map[string]bool{}
+	for _, name := range exclude {
+		if strings.TrimSpace(name) == "" {
+			*errs = append(*errs, fmt.Errorf("%s exclude cannot contain an empty skill name", label))
+			continue
+		}
+		if excludeSet[name] {
+			*errs = append(*errs, fmt.Errorf("%s exclude has duplicate skill %q", label, name))
+		}
+		if includeSet[name] {
+			*errs = append(*errs, fmt.Errorf("%s cannot both include and exclude skill %q", label, name))
+		}
+		excludeSet[name] = true
 	}
 }
 
@@ -235,10 +350,20 @@ func validateEnvRefs(label string, value any, errs *[]error) {
 			validateEnvRefs(fmt.Sprintf("%s[%d]", label, i), item, errs)
 		}
 	case Skill:
-		validateEnvRefs(label+".name", typed.Name, errs)
 		validateEnvRefs(label+".path", typed.Path, errs)
-		validateEnvRefs(label+".source", typed.Source, errs)
+		validateEnvRefs(label+".name", typed.Name, errs)
+		validateEnvRefs(label+".git", typed.Git, errs)
+		validateEnvRefs(label+".include", typed.Include, errs)
+		validateEnvRefs(label+".exclude", typed.Exclude, errs)
 		validateEnvRefs(label+".targets", typed.Targets, errs)
+	case *GitSkill:
+		if typed != nil {
+			validateEnvRefs(label, *typed, errs)
+		}
+	case GitSkill:
+		validateEnvRefs(label+".url", typed.URL, errs)
+		validateEnvRefs(label+".ref", typed.Ref, errs)
+		validateEnvRefs(label+".subdir", typed.Subdir, errs)
 	case *RemoteSource:
 		if typed != nil {
 			validateEnvRefs(label, *typed, errs)

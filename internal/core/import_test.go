@@ -197,7 +197,7 @@ func TestImportSkillsIntoNeutralTargets(t *testing.T) {
 		t.Fatalf("expected one merged skill, got %#v", result.Config.Skills)
 	}
 	imported := result.Config.Skills[0]
-	if imported.Name != "review" || !slices.Contains(imported.Targets, AgentCodex) || !slices.Contains(imported.Targets, AgentClaude) {
+	if imported.Name != "review" || len(imported.Targets) != 0 {
 		t.Fatalf("skill was not imported with neutral targets: %#v", imported)
 	}
 	if string(result.Files[filepath.Join("skills", "review", "SKILL.md")]) != string(skill) {
@@ -243,6 +243,81 @@ func TestWriteSelectedImportImportsOnlySelectedSkill(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(kanonHome, "skills", "lint", "SKILL.md")); !os.IsNotExist(err) {
 		t.Fatalf("unselected lint skill should not be written, stat err: %v", err)
+	}
+}
+
+func TestWriteSelectedImportOmitsAllTargetLocalSkillConfig(t *testing.T) {
+	kanonHome := t.TempDir()
+	userHome := t.TempDir()
+	skill := []byte("---\nname: review\n---\n\nReview code.\n")
+	writeTestFile(t, filepath.Join(userHome, ".agents", "skills", "review", "SKILL.md"), skill)
+	writeTestFile(t, filepath.Join(userHome, ".claude", "skills", "review", "SKILL.md"), skill)
+
+	plan, err := PlanImport(ImportOptions{
+		TargetOptions: TargetOptions{
+			KanonHome: kanonHome,
+			UserHome:  userHome,
+			Agent:     AgentAll,
+		},
+		InstructionPolicy: InstructionPolicySkip,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reviewPath := filepath.Join(kanonHome, "skills", "review", "SKILL.md")
+	if err := WriteSelectedImport(plan, map[string]bool{reviewPath: true}, kanonHome); err != nil {
+		t.Fatal(err)
+	}
+	cfg, _, err := LoadConfig(kanonHome, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Skills) != 0 {
+		t.Fatalf("all-target local skill should not require config, got %#v", cfg.Skills)
+	}
+	if data, err := os.ReadFile(reviewPath); err != nil || string(data) != string(skill) {
+		t.Fatalf("selected skill file was not written correctly: %q, %v", data, err)
+	}
+}
+
+func TestWriteSelectedImportReplacesRestrictiveSkillConfigWithImplicitLocalSkill(t *testing.T) {
+	kanonHome := t.TempDir()
+	userHome := t.TempDir()
+	skill := []byte("---\nname: review\n---\n\nReview code.\n")
+	reviewPath := filepath.Join(kanonHome, "skills", "review", "SKILL.md")
+	writeTestFile(t, reviewPath, skill)
+	writeTestFile(t, filepath.Join(userHome, ".agents", "skills", "review", "SKILL.md"), skill)
+	writeTestFile(t, filepath.Join(userHome, ".claude", "skills", "review", "SKILL.md"), skill)
+	if err := WriteConfig(filepath.Join(kanonHome, "kanon.yaml"), &Config{
+		Version: 1,
+		Skills:  []Skill{{Name: "review", Targets: []string{AgentCodex}}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	plan, err := PlanImport(ImportOptions{
+		TargetOptions: TargetOptions{
+			KanonHome: kanonHome,
+			UserHome:  userHome,
+			Agent:     AgentAll,
+		},
+		InstructionPolicy: InstructionPolicySkip,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.ApplyPlan.Changes) != 1 || plan.ApplyPlan.Changes[0].Path != reviewPath {
+		t.Fatalf("expected one selected skill config update, got %#v", plan.ApplyPlan.Changes)
+	}
+	if err := WriteSelectedImport(plan, map[string]bool{reviewPath: true}, kanonHome); err != nil {
+		t.Fatal(err)
+	}
+	cfg, _, err := LoadConfig(kanonHome, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Skills) != 0 {
+		t.Fatalf("all-target local skill should replace restrictive config with implicit config, got %#v", cfg.Skills)
 	}
 }
 

@@ -83,11 +83,18 @@ func WriteImport(home string, result *ImportResult, force bool) error {
 			return err
 		}
 	}
+	compactImplicitLocalSkills(result.Config)
 	return WriteConfig(configPath, result.Config)
 }
 
 func ImportPreview(result *ImportResult) ([]byte, error) {
-	return configToYAML(result.Config)
+	if result == nil || result.Config == nil {
+		return nil, errors.New("missing import result")
+	}
+	cfg := *result.Config
+	cfg.Skills = append([]Skill(nil), result.Config.Skills...)
+	compactImplicitLocalSkills(&cfg)
+	return configToYAML(&cfg)
 }
 
 func configToYAML(cfg *Config) ([]byte, error) {
@@ -112,6 +119,25 @@ func mergeImport(dst, src *ImportResult) {
 	}
 	dst.Warnings = append(dst.Warnings, src.Warnings...)
 	dst.UnmappedPath = append(dst.UnmappedPath, src.UnmappedPath...)
+}
+
+func compactImplicitLocalSkills(cfg *Config) {
+	if cfg == nil {
+		return
+	}
+	filtered := cfg.Skills[:0]
+	for _, skill := range cfg.Skills {
+		if skill.Git == nil &&
+			skill.Path == "" &&
+			len(skill.Targets) == 0 &&
+			skill.Enabled == nil &&
+			len(skill.Include) == 0 &&
+			len(skill.Exclude) == 0 {
+			continue
+		}
+		filtered = append(filtered, skill)
+	}
+	cfg.Skills = filtered
 }
 
 func readIfExists(path string) ([]byte, error) {

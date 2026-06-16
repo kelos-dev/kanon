@@ -22,11 +22,19 @@ type Instructions struct {
 }
 
 type Skill struct {
-	Name    string        `yaml:"name"`
-	Path    string        `yaml:"path"`
-	Source  *RemoteSource `yaml:"source"`
-	Targets []string      `yaml:"targets,omitempty"`
-	Enabled *bool         `yaml:"enabled"`
+	Name    string    `yaml:"name,omitempty"`
+	Path    string    `yaml:"path,omitempty"`
+	Git     *GitSkill `yaml:"git,omitempty"`
+	Include []string  `yaml:"include,omitempty"`
+	Exclude []string  `yaml:"exclude,omitempty"`
+	Targets []string  `yaml:"targets,omitempty"`
+	Enabled *bool     `yaml:"enabled,omitempty"`
+}
+
+type GitSkill struct {
+	URL    string `yaml:"url"`
+	Ref    string `yaml:"ref"`
+	Subdir string `yaml:"subdir,omitempty"`
 }
 
 type RemoteSource struct {

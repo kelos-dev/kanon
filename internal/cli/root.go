@@ -48,8 +48,8 @@ It works in three states, mirroring chezmoi:
                      ~/.codex, ~/.claude, and project directories)
 
 Commands move data between these states: render (source to target), diff and
-apply (target to destination), import (destination back to source), lock remote
-skill pins, and pull/push/update to sync the source with a remote.`,
+apply (target to destination), import (destination back to source), lock git
+skill provider pins, and pull/push/update to sync the source with a remote.`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
@@ -206,7 +206,7 @@ func statusCommand(opts *options) *cobra.Command {
 func lockCommand(opts *options) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "lock",
-		Short: "Create or repair kanon.lock remote skill pins",
+		Short: "Create or repair kanon.lock git skill provider pins",
 		Args:  cobra.NoArgs,
 		RunE:  runLockCommand(opts),
 	}
@@ -244,7 +244,7 @@ func runLockCommand(opts *options) func(*cobra.Command, []string) error {
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "Locked %d remote skill source(s) in %s\n", len(lock.Sources), path)
+		fmt.Fprintf(cmd.OutOrStdout(), "Locked %d git skill provider(s) in %s\n", len(lock.Sources), path)
 		return nil
 	}
 }
@@ -252,7 +252,7 @@ func runLockCommand(opts *options) func(*cobra.Command, []string) error {
 func sourceLockCommand(opts *options) *cobra.Command {
 	return &cobra.Command{
 		Use:   "lock",
-		Short: "Resolve remote skill sources and write kanon.lock",
+		Short: "Resolve git skill providers and write kanon.lock",
 		Args:  cobra.NoArgs,
 		RunE:  runLockCommand(opts),
 	}
@@ -261,7 +261,7 @@ func sourceLockCommand(opts *options) *cobra.Command {
 func lockCheckCommand(opts *options) *cobra.Command {
 	return &cobra.Command{
 		Use:   "check",
-		Short: "Verify remote skill sources against kanon.lock",
+		Short: "Verify git skill providers against kanon.lock",
 		Args:  cobra.NoArgs,
 		RunE:  runLockCheckCommand(opts, func() bool { return true }),
 	}
@@ -271,11 +271,11 @@ func sourceCheckCommand(opts *options) *cobra.Command {
 	var locked bool
 	cmd := &cobra.Command{
 		Use:   "check",
-		Short: "Verify remote skill sources against kanon.lock",
+		Short: "Verify git skill providers against kanon.lock",
 		Args:  cobra.NoArgs,
 		RunE:  runLockCheckCommand(opts, func() bool { return locked }),
 	}
-	cmd.Flags().BoolVar(&locked, "locked", false, "require every remote source to match kanon.lock")
+	cmd.Flags().BoolVar(&locked, "locked", false, "require every git skill provider to match kanon.lock")
 	return cmd
 }
 
@@ -299,32 +299,32 @@ func runLockCheckCommand(opts *options, requireLocked func() bool) func(*cobra.C
 func lockUpdateCommand(opts *options) *cobra.Command {
 	var all bool
 	cmd := &cobra.Command{
-		Use:   "update [skill ...]",
-		Short: "Re-resolve remote skill sources and update kanon.lock",
+		Use:   "update [provider-name ...]",
+		Short: "Re-resolve git skill providers and update kanon.lock",
 		RunE:  runLockUpdateCommand(opts, &all, "lock update"),
 	}
-	cmd.Flags().BoolVar(&all, "all", false, "update every enabled remote skill source")
+	cmd.Flags().BoolVar(&all, "all", false, "update every enabled git skill provider")
 	return cmd
 }
 
 func sourceUpdateCommand(opts *options) *cobra.Command {
 	var all bool
 	cmd := &cobra.Command{
-		Use:   "update [skill ...]",
-		Short: "Re-resolve remote skill sources and update kanon.lock",
+		Use:   "update [provider-name ...]",
+		Short: "Re-resolve git skill providers and update kanon.lock",
 		RunE:  runLockUpdateCommand(opts, &all, "source update"),
 	}
-	cmd.Flags().BoolVar(&all, "all", false, "update every enabled remote skill source")
+	cmd.Flags().BoolVar(&all, "all", false, "update every enabled git skill provider")
 	return cmd
 }
 
 func runLockUpdateCommand(opts *options, all *bool, commandName string) func(*cobra.Command, []string) error {
 	return func(cmd *cobra.Command, args []string) error {
 		if *all && len(args) > 0 {
-			return fmt.Errorf("use either %s --all or named skills, not both", commandName)
+			return fmt.Errorf("use either %s --all or named git skill providers, not both", commandName)
 		}
 		if !*all && len(args) == 0 {
-			return fmt.Errorf("%s requires a skill name or --all", commandName)
+			return fmt.Errorf("%s requires a git skill provider name or --all", commandName)
 		}
 		cfg, home, err := opts.loadConfig()
 		if err != nil {

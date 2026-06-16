@@ -79,7 +79,7 @@ func LockRemoteSkillSources(cfg *Config, home string) (*SourceLock, error) {
 		if entry, ok := existing[item.Owner]; ok {
 			if err := entryMatchesRemoteSource(entry, item.Source); err == nil {
 				if err := rejectCredentialBearingLockURL(item.Source.URL); err != nil {
-					return nil, fmt.Errorf("skill %q source url: %w", item.Name, err)
+					return nil, fmt.Errorf("git skill provider %q url: %w", item.Name, err)
 				}
 				entries = append(entries, entry)
 				continue
@@ -122,17 +122,20 @@ func UpdateRemoteSkillSources(cfg *Config, home string, names []string, all bool
 		return resolveRemoteSkillSources(cfg, home)
 	}
 	if len(names) == 0 {
-		return nil, errors.New("lock update requires a skill name or --all")
+		return nil, errors.New("lock update requires a git skill provider name or --all")
 	}
 	items := enabledRemoteSkillSources(cfg)
 	currentByName := map[string]remoteSkillSource{}
 	updateNames := map[string]bool{}
 	for _, item := range items {
+		if _, ok := currentByName[item.Name]; ok {
+			return nil, fmt.Errorf("git skill provider name %q is ambiguous", item.Name)
+		}
 		currentByName[item.Name] = item
 	}
 	for _, name := range names {
 		if _, ok := currentByName[name]; !ok {
-			return nil, fmt.Errorf("enabled remote skill %q not found", name)
+			return nil, fmt.Errorf("enabled git skill provider %q not found", name)
 		}
 		updateNames[name] = true
 	}
@@ -150,7 +153,7 @@ func UpdateRemoteSkillSources(cfg *Config, home string, names []string, all bool
 		if entry, ok := existing[item.Owner]; ok {
 			if err := entryMatchesRemoteSource(entry, item.Source); err == nil {
 				if err := rejectCredentialBearingLockURL(item.Source.URL); err != nil {
-					return nil, fmt.Errorf("skill %q source url: %w", item.Name, err)
+					return nil, fmt.Errorf("git skill provider %q url: %w", item.Name, err)
 				}
 				entries[item.Owner] = entry
 				continue
@@ -190,7 +193,7 @@ func CheckRemoteSkillSources(cfg *Config, home string, requireLocked bool) []err
 	}
 	if lock == nil {
 		if requireLocked && len(items) > 0 {
-			return []error{fmt.Errorf("%s is required for remote sources; run kanon lock", path)}
+			return []error{fmt.Errorf("%s is required for git skill providers; run kanon lock", path)}
 		}
 		return nil
 	}
@@ -200,7 +203,7 @@ func CheckRemoteSkillSources(cfg *Config, home string, requireLocked bool) []err
 		current[item.Owner] = item
 	}
 	for _, entry := range lock.Sources {
-		if strings.HasPrefix(entry.Owner, "skill.") {
+		if strings.HasPrefix(entry.Owner, "skill.git.") || strings.HasPrefix(entry.Owner, "skill_source.") || strings.HasPrefix(entry.Owner, "skill.") {
 			if _, ok := current[entry.Owner]; !ok {
 				errs = append(errs, fmt.Errorf("kanon.lock has stale entry %q", entry.Owner))
 			}
@@ -211,7 +214,7 @@ func CheckRemoteSkillSources(cfg *Config, home string, requireLocked bool) []err
 		entry, ok := sourceLockEntry(lock, item.Owner)
 		if !ok {
 			if requireLocked {
-				errs = append(errs, fmt.Errorf("remote skill %q is missing from kanon.lock", item.Name))
+				errs = append(errs, fmt.Errorf("git skill provider %q is missing from kanon.lock", item.Name))
 			}
 			continue
 		}
@@ -220,7 +223,7 @@ func CheckRemoteSkillSources(cfg *Config, home string, requireLocked bool) []err
 			continue
 		}
 		lockedEntry := entry
-		if _, err := materializeRemoteSkill(home, item.Name, item.Source, &lockedEntry); err != nil {
+		if _, err := materializeRemoteSkillSource(home, item.Name, item.Source, &lockedEntry); err != nil {
 			errs = append(errs, err)
 			continue
 		}
@@ -230,10 +233,10 @@ func CheckRemoteSkillSources(cfg *Config, home string, requireLocked bool) []err
 			continue
 		}
 		if resolved.ResolvedRef != entry.ResolvedRef {
-			errs = append(errs, fmt.Errorf("remote skill %q resolves to %s, but kanon.lock pins %s", item.Name, resolved.ResolvedRef, entry.ResolvedRef))
+			errs = append(errs, fmt.Errorf("git skill provider %q resolves to %s, but kanon.lock pins %s", item.Name, resolved.ResolvedRef, entry.ResolvedRef))
 		}
 		if resolved.ContentSHA256 != entry.ContentSHA256 {
-			errs = append(errs, fmt.Errorf("remote skill %q content hash is %s, but kanon.lock pins %s", item.Name, resolved.ContentSHA256, entry.ContentSHA256))
+			errs = append(errs, fmt.Errorf("git skill provider %q content hash is %s, but kanon.lock pins %s", item.Name, resolved.ContentSHA256, entry.ContentSHA256))
 		}
 	}
 	return errs
@@ -247,11 +250,11 @@ func SourceLockWarnings(cfg *Config, lock *SourceLock) []string {
 		}
 		entry, ok := sourceLockEntry(lock, item.Owner)
 		if !ok {
-			warnings = append(warnings, fmt.Sprintf("skill %q source uses mutable ref %q without a matching kanon.lock entry", item.Name, item.Source.Ref))
+			warnings = append(warnings, fmt.Sprintf("git skill provider %q ref %q is mutable without a matching kanon.lock entry", item.Name, item.Source.Ref))
 			continue
 		}
 		if err := entryMatchesRemoteSource(entry, item.Source); err != nil {
-			warnings = append(warnings, fmt.Sprintf("skill %q source uses mutable ref %q without a matching kanon.lock entry", item.Name, item.Source.Ref))
+			warnings = append(warnings, fmt.Sprintf("git skill provider %q ref %q is mutable without a matching kanon.lock entry", item.Name, item.Source.Ref))
 		}
 	}
 	return warnings
@@ -302,7 +305,7 @@ func entryMatchesRemoteSource(entry SourceLockEntry, source RemoteSource) error 
 
 func resolveSourceLockEntry(home string, item remoteSkillSource) (SourceLockEntry, error) {
 	if err := rejectCredentialBearingLockURL(item.Source.URL); err != nil {
-		return SourceLockEntry{}, fmt.Errorf("skill %q source url: %w", item.Name, err)
+		return SourceLockEntry{}, fmt.Errorf("git skill provider %q url: %w", item.Name, err)
 	}
 	normalized, err := normalizeRemoteSource(item.Source)
 	if err != nil {
@@ -339,20 +342,33 @@ func normalizeRemoteSource(source RemoteSource) (RemoteSource, error) {
 func enabledRemoteSkillSources(cfg *Config) []remoteSkillSource {
 	var items []remoteSkillSource
 	for _, skill := range cfg.Skills {
-		if !enabled(skill.Enabled) || skill.Source == nil {
+		if !enabled(skill.Enabled) || skill.Git == nil {
+			continue
+		}
+		name, err := gitSkillProviderName(skill)
+		if err != nil {
 			continue
 		}
 		items = append(items, remoteSkillSource{
-			Name:   skill.Name,
-			Owner:  remoteSkillSourceOwner(skill.Name),
-			Source: *skill.Source,
+			Name:   name,
+			Owner:  gitSkillSourceOwner(name),
+			Source: gitSkillToRemoteSource(*skill.Git),
 		})
 	}
 	return items
 }
 
-func remoteSkillSourceOwner(name string) string {
-	return "skill." + name
+func gitSkillSourceOwner(name string) string {
+	return "skill.git." + name
+}
+
+func gitSkillToRemoteSource(source GitSkill) RemoteSource {
+	return RemoteSource{
+		Type:   "git",
+		URL:    source.URL,
+		Ref:    source.Ref,
+		Subdir: source.Subdir,
+	}
 }
 
 func rejectCredentialBearingLockURL(raw string) error {

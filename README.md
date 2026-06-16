@@ -60,9 +60,9 @@ Every command is an arrow between two states:
 | `diff` | target ↔ destination | Preview the changes apply would make |
 | `apply` | target → destination | Write the changes to disk |
 | `status` | — | Source git status and destination drift |
-| `lock` | source | Create or repair `kanon.lock` remote skill pins |
-| `lock check` | source | Verify remote skill pins against `kanon.lock` |
-| `lock update` | source | Intentionally re-resolve remote skill pins in `kanon.lock` |
+| `lock` | source | Create or repair `kanon.lock` git skill provider pins |
+| `lock check` | source | Verify git skill provider pins against `kanon.lock` |
+| `lock update` | source | Intentionally re-resolve git skill provider pins in `kanon.lock` |
 | `import` (alias `add`) | destination → source | Capture existing agent files into the spec |
 | `update` | remote → destination | Pull, then render and apply in one step |
 | `ui` | target ↔ destination | Review, select, and apply changes in an interactive TUI |
@@ -130,35 +130,61 @@ changes they would make without touching the destination. For `update`, the
 `git pull` still runs (so the preview reflects the updated source); only the
 destination writes are skipped.
 
-Skills may be stored locally under `skills/<name>` or materialized from a
-pinned git source:
+Local skills are stored under `skills/<name>` and rendered automatically:
+
+```text
+skills/code-reviewer/SKILL.md
+```
+
+Remote skill directories are configured as git providers in `skills`. Each
+direct child directory under `git.subdir` must be a skill directory with its own
+`SKILL.md`; Kanon renders each child using the provider namespace and child
+directory name:
 
 ```yaml
 skills:
-  - name: code-reviewer
-    source:
-      type: git
+  - git:
       url: https://github.com/acme/agent-skills.git
       ref: 8f3c4e2d9a1b0c7d6e5f4a3b2c1d0e9f8a7b6c5d
-      subdir: code-reviewer
+      subdir: skills
 ```
 
-Remote skills are fetched automatically the first time `render`, `diff`,
-`apply`, `status`, or `update` needs them. Kanon caches materialized sources
+Kanon derives the provider namespace from the git URL by stripping `.git` from
+the repository name. With that config, a remote
+`skills/code-reviewer/SKILL.md` renders as `agent-skills:code-reviewer`, so it
+does not collide with a local `skills/code-reviewer/SKILL.md`. Set `name`
+when you want a different namespace or when two providers would derive the same
+one.
+
+Use `include` or `exclude` to render only part of a source:
+
+```yaml
+skills:
+  - name: shared
+    git:
+      url: https://github.com/acme/agent-skills.git
+      ref: main
+      subdir: skills
+    include:
+      - code-reviewer
+```
+
+Git skill providers are fetched automatically the first time `render`, `diff`,
+`apply`, `status`, or `update` needs them. Kanon caches materialized providers
 under `.kanon/cache/sources/`, which is gitignored by the starter `.gitignore`;
 if the cache already exists, Kanon reuses it and does not refresh it. Pin `ref`
 to a commit SHA for reproducible behavior across machines.
 
 For mutable refs such as branches or tags, run `kanon lock` to write a tracked
 `kanon.lock` entry with the resolved commit and a stable content hash for each
-enabled remote skill. When a matching lock entry exists, render, diff, apply,
-status, and update materialize that locked commit instead of the mutable
+enabled git skill provider. When a matching lock entry exists, render, diff,
+apply, status, and update materialize that locked commit instead of the mutable
 declared ref. Plain `kanon lock` preserves existing pins when their configured
-coordinates still match, so it will not silently advance a branch. Use
-`kanon lock check` in CI to fail when a remote source is missing from the
+coordinates still match, so it will not silently advance a branch.
+Use `kanon lock check` in CI to fail when a git skill provider is missing from the
 lockfile, its configured coordinates changed, its declared ref now resolves
 somewhere else, or the cached content does not match the locked hash. Use
-`kanon lock update <skill>` or `kanon lock update --all` to intentionally
+`kanon lock update <provider-name>` or `kanon lock update --all` to intentionally
 refresh lock entries.
 
 Co-owned config files that the agent also writes are merged instead of replaced.

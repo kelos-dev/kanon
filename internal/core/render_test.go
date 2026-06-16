@@ -26,7 +26,6 @@ func TestRenderUserScopedOutputs(t *testing.T) {
 				"instructions/claude.md",
 			},
 		},
-		Skills: []Skill{{Name: "review"}},
 		MCP: MCPConfig{Servers: map[string]MCPServer{
 			"context": {
 				Command: "context-server",
@@ -140,6 +139,19 @@ hooks:
 	}
 }
 
+func TestRenderSkipsDisabledUnnamedSkill(t *testing.T) {
+	enabled := false
+	_, err := RenderAll(&Config{
+		Version: 1,
+		Skills: []Skill{{
+			Enabled: &enabled,
+		}},
+	}, TargetOptions{KanonHome: t.TempDir(), UserHome: t.TempDir(), Agent: AgentCodex})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestValidateEnvRefs(t *testing.T) {
 	cfg := &Config{
 		Version: 1,
@@ -157,26 +169,76 @@ func TestValidateEnvRefs(t *testing.T) {
 	}
 }
 
-func TestRenderRemoteSkillFromGitSource(t *testing.T) {
+func TestRenderGitSkillSourceIncludeFromDirectory(t *testing.T) {
 	kanonHome := t.TempDir()
 	userHome := t.TempDir()
 	repo := t.TempDir()
 	writeTestFile(t, filepath.Join(repo, "packs", "review", "SKILL.md"), []byte("---\nname: review\n---\n\nReview code.\n"))
 	writeTestFile(t, filepath.Join(repo, "packs", "review", "notes.txt"), []byte("remote note\n"))
-	runTestGit(t, repo, "init")
-	runTestGit(t, repo, "add", ".")
-	runTestGit(t, repo, "-c", "user.name=Kanon Test", "-c", "user.email=kanon@example.test", "commit", "-m", "add skill")
-	ref := strings.TrimSpace(string(runTestGit(t, repo, "rev-parse", "HEAD")))
+	writeTestFile(t, filepath.Join(repo, "packs", "lint", "SKILL.md"), []byte("---\nname: lint\n---\n\nLint code.\n"))
+	ref := commitTestRepo(t, repo, "add skills")
 
 	cfg := &Config{
 		Version: 1,
 		Skills: []Skill{{
-			Name: "review",
-			Source: &RemoteSource{
-				Type:   "git",
+			Name: "shared",
+			Git: &GitSkill{
 				URL:    repo,
 				Ref:    ref,
-				Subdir: "packs/review",
+				Subdir: "packs",
+			},
+			Include: []string{"review"},
+		}},
+	}
+
+	files, err := RenderAll(cfg, TargetOptions{
+		KanonHome: kanonHome,
+		UserHome:  userHome,
+		Agent:     AgentCodex,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	byPath := renderedByPath(files)
+	remoteSkill := string(byPath[filepath.Join(userHome, ".agents", "skills", "shared:review", "SKILL.md")].Content)
+	if remoteSkill == "" {
+		t.Fatalf("remote skill was not rendered")
+	}
+	if !strings.Contains(remoteSkill, "name: shared:review") {
+		t.Fatalf("remote skill frontmatter was not namespaced: %s", remoteSkill)
+	}
+	if string(byPath[filepath.Join(userHome, ".agents", "skills", "shared:review", "notes.txt")].Content) != "remote note\n" {
+		t.Fatalf("remote skill extra file was not rendered")
+	}
+	if _, ok := byPath[filepath.Join(userHome, ".agents", "skills", "shared:lint", "SKILL.md")]; ok {
+		t.Fatalf("excluded remote skill was rendered")
+	}
+
+	if err := os.RemoveAll(repo); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := RenderAll(cfg, TargetOptions{KanonHome: kanonHome, UserHome: userHome, Agent: AgentCodex}); err != nil {
+		t.Fatalf("expected cached remote skill after source repo removal: %v", err)
+	}
+}
+
+func TestRenderRemoteSkillDirectoryFromGitSource(t *testing.T) {
+	kanonHome := t.TempDir()
+	userHome := t.TempDir()
+	repo := filepath.Join(t.TempDir(), "shared-skills.git")
+	writeTestFile(t, filepath.Join(repo, "packs", "review", "SKILL.md"), []byte("---\nname: review\n---\n\nReview code.\n"))
+	writeTestFile(t, filepath.Join(repo, "packs", "review", "notes.txt"), []byte("review note\n"))
+	writeTestFile(t, filepath.Join(repo, "packs", "lint", "SKILL.md"), []byte("---\nname: lint\n---\n\nLint code.\n"))
+	writeTestFile(t, filepath.Join(repo, "packs", "README.md"), []byte("skill directory docs\n"))
+	ref := commitTestRepo(t, repo, "add skill directory")
+
+	cfg := &Config{
+		Version: 1,
+		Skills: []Skill{{
+			Git: &GitSkill{
+				URL:    repo,
+				Ref:    ref,
+				Subdir: "packs",
 			},
 		}},
 	}
@@ -190,41 +252,49 @@ func TestRenderRemoteSkillFromGitSource(t *testing.T) {
 		t.Fatal(err)
 	}
 	byPath := renderedByPath(files)
-	if string(byPath[filepath.Join(userHome, ".agents", "skills", "review", "SKILL.md")].Content) == "" {
-		t.Fatalf("remote skill was not rendered")
+	if string(byPath[filepath.Join(userHome, ".agents", "skills", "shared-skills:review", "notes.txt")].Content) != "review note\n" {
+		t.Fatalf("remote skill directory review files were not rendered")
 	}
-	if string(byPath[filepath.Join(userHome, ".agents", "skills", "review", "notes.txt")].Content) != "remote note\n" {
-		t.Fatalf("remote skill extra file was not rendered")
+	if string(byPath[filepath.Join(userHome, ".agents", "skills", "shared-skills:lint", "SKILL.md")].Content) == "" {
+		t.Fatalf("remote skill directory lint skill was not rendered")
 	}
 
 	if err := os.RemoveAll(repo); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := RenderAll(cfg, TargetOptions{KanonHome: kanonHome, UserHome: userHome, Agent: AgentCodex}); err != nil {
-		t.Fatalf("expected cached remote skill after source repo removal: %v", err)
+		t.Fatalf("expected cached remote skill directory after source repo removal: %v", err)
 	}
 }
 
-func TestValidateRemoteSkillSource(t *testing.T) {
+func TestValidateGitSkillSource(t *testing.T) {
 	cfg := &Config{
 		Version: 1,
 		Skills: []Skill{{
-			Name: "bad",
-			Path: "skills/bad",
-			Source: &RemoteSource{
-				Type:   "http",
+			Git: &GitSkill{
 				Subdir: "../bad",
 			},
+			Include: []string{"review", "review", "skip"},
+			Exclude: []string{"skip", ""},
+		}, {
+			Name: "bad",
+			Git:  &GitSkill{URL: "https://example.invalid/repo.git", Ref: "abc123"},
+		}, {
+			Name: "bad",
+			Git:  &GitSkill{URL: "https://example.invalid/repo.git", Ref: "abc123"},
 		}},
 	}
 	errs := ValidateConfig(cfg, t.TempDir())
 	joined := errorsText(errs)
 	for _, want := range []string{
-		"cannot be used with path",
-		"unsupported type",
+		"requires name",
+		`git skill provider "bad" is duplicated`,
 		"requires url",
 		"requires ref",
 		"invalid subdir",
+		"include has duplicate skill",
+		"exclude cannot contain an empty skill name",
+		"cannot both include and exclude skill",
 	} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("expected validation error containing %q, got: %s", want, joined)
@@ -237,10 +307,9 @@ func TestValidateRemoteSkillURLUsesEnvRefs(t *testing.T) {
 		Version: 1,
 		Skills: []Skill{{
 			Name: "remote",
-			Source: &RemoteSource{
-				Type: "git",
-				URL:  "https://example.invalid/${KANON_TEST_MISSING_TOKEN}/repo.git",
-				Ref:  "abc123",
+			Git: &GitSkill{
+				URL: "https://example.invalid/${KANON_TEST_MISSING_TOKEN}/repo.git",
+				Ref: "abc123",
 			},
 		}},
 	}
@@ -262,12 +331,58 @@ func TestRemoteSkillMissingSkillFileReportsClearly(t *testing.T) {
 	_, err := RenderAll(&Config{
 		Version: 1,
 		Skills: []Skill{{
-			Name:   "missing",
-			Source: &RemoteSource{Type: "git", URL: repo, Ref: ref},
+			Name: "missing",
+			Git:  &GitSkill{URL: repo, Ref: ref},
 		}},
 	}, TargetOptions{KanonHome: kanonHome, UserHome: t.TempDir(), Agent: AgentCodex})
-	if err == nil || !strings.Contains(err.Error(), "missing SKILL.md") {
-		t.Fatalf("expected missing SKILL.md error, got: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "contains no skill directories") {
+		t.Fatalf("expected empty skill source error, got: %v", err)
+	}
+}
+
+func TestRemoteSkillDirectoryChildMissingSkillFileReportsClearly(t *testing.T) {
+	kanonHome := t.TempDir()
+	repo := t.TempDir()
+	writeTestFile(t, filepath.Join(repo, "packs", "review", "SKILL.md"), []byte("---\nname: review\n---\n"))
+	writeTestFile(t, filepath.Join(repo, "packs", "broken", "README.md"), []byte("not a skill\n"))
+	ref := commitTestRepo(t, repo, "add broken skill directory")
+
+	_, err := RenderAll(&Config{
+		Version: 1,
+		Skills: []Skill{{
+			Name: "bundle",
+			Git:  &GitSkill{URL: repo, Ref: ref, Subdir: "packs"},
+		}},
+	}, TargetOptions{KanonHome: kanonHome, UserHome: t.TempDir(), Agent: AgentCodex})
+	if err == nil || !strings.Contains(err.Error(), `git skill provider "bundle" child "broken"`) || !strings.Contains(err.Error(), "missing SKILL.md") {
+		t.Fatalf("expected broken child skill error, got: %v", err)
+	}
+}
+
+func TestRemoteSkillDirectoryUsesProviderNamespace(t *testing.T) {
+	kanonHome := t.TempDir()
+	userHome := t.TempDir()
+	repo := t.TempDir()
+	writeTestFile(t, filepath.Join(kanonHome, "skills", "review", "SKILL.md"), []byte("---\nname: review\n---\n"))
+	writeTestFile(t, filepath.Join(repo, "packs", "review", "SKILL.md"), []byte("---\nname: review\n---\n"))
+	ref := commitTestRepo(t, repo, "add duplicate skill")
+
+	files, err := RenderAll(&Config{
+		Version: 1,
+		Skills: []Skill{
+			{Name: "review"},
+			{Name: "bundle", Git: &GitSkill{URL: repo, Ref: ref, Subdir: "packs"}},
+		},
+	}, TargetOptions{KanonHome: kanonHome, UserHome: userHome, Agent: AgentCodex})
+	if err != nil {
+		t.Fatal(err)
+	}
+	byPath := renderedByPath(files)
+	if _, ok := byPath[filepath.Join(userHome, ".agents", "skills", "review", "SKILL.md")]; !ok {
+		t.Fatalf("local skill was not rendered")
+	}
+	if _, ok := byPath[filepath.Join(userHome, ".agents", "skills", "bundle:review", "SKILL.md")]; !ok {
+		t.Fatalf("remote skill was not rendered with provider namespace")
 	}
 }
 
@@ -275,14 +390,14 @@ func TestRemoteSkillRootSourceDoesNotCacheGitMetadata(t *testing.T) {
 	kanonHome := t.TempDir()
 	userHome := t.TempDir()
 	repo := t.TempDir()
-	writeTestFile(t, filepath.Join(repo, "SKILL.md"), []byte("---\nname: root\n---\n"))
-	ref := commitTestRepo(t, repo, "add root skill")
+	writeTestFile(t, filepath.Join(repo, "root", "SKILL.md"), []byte("---\nname: root\n---\n"))
+	ref := commitTestRepo(t, repo, "add root skill directory")
 
 	cfg := &Config{
 		Version: 1,
 		Skills: []Skill{{
-			Name:   "root",
-			Source: &RemoteSource{Type: "git", URL: repo, Ref: ref},
+			Name: "root",
+			Git:  &GitSkill{URL: repo, Ref: ref},
 		}},
 	}
 	if _, err := RenderAll(cfg, TargetOptions{KanonHome: kanonHome, UserHome: userHome, Agent: AgentCodex}); err != nil {
@@ -295,7 +410,7 @@ func TestRemoteSkillRootSourceDoesNotCacheGitMetadata(t *testing.T) {
 	} else if !os.IsNotExist(err) {
 		t.Fatalf("stat cached git config: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(cachePath, "SKILL.md")); err != nil {
+	if _, err := os.Stat(filepath.Join(cachePath, "root", "SKILL.md")); err != nil {
 		t.Fatalf("expected materialized skill file in cache: %v", err)
 	}
 }
@@ -303,7 +418,7 @@ func TestRemoteSkillRootSourceDoesNotCacheGitMetadata(t *testing.T) {
 func TestRemoteSkillRejectsSymlinkedSubdir(t *testing.T) {
 	kanonHome := t.TempDir()
 	repo := t.TempDir()
-	writeTestFile(t, filepath.Join(repo, "actual", "SKILL.md"), []byte("---\nname: actual\n---\n"))
+	writeTestFile(t, filepath.Join(repo, "actual", "skill", "SKILL.md"), []byte("---\nname: actual\n---\n"))
 	if err := os.Symlink("actual", filepath.Join(repo, "linked")); err != nil {
 		t.Skipf("symlink unavailable: %v", err)
 	}
@@ -312,8 +427,8 @@ func TestRemoteSkillRejectsSymlinkedSubdir(t *testing.T) {
 	_, err := RenderAll(&Config{
 		Version: 1,
 		Skills: []Skill{{
-			Name:   "linked",
-			Source: &RemoteSource{Type: "git", URL: repo, Ref: ref, Subdir: "linked"},
+			Name: "linked",
+			Git:  &GitSkill{URL: repo, Ref: ref, Subdir: "linked"},
 		}},
 	}, TargetOptions{KanonHome: kanonHome, UserHome: t.TempDir(), Agent: AgentCodex})
 	if err == nil || !strings.Contains(err.Error(), `source subdir "linked" is not a directory`) {
@@ -326,8 +441,8 @@ func TestRemoteSkillRejectsSymlinkedFiles(t *testing.T) {
 	repo := t.TempDir()
 	outside := filepath.Join(t.TempDir(), "secret.txt")
 	writeTestFile(t, outside, []byte("secret\n"))
-	writeTestFile(t, filepath.Join(repo, "skill", "SKILL.md"), []byte("---\nname: skill\n---\n"))
-	if err := os.Symlink(outside, filepath.Join(repo, "skill", "notes.txt")); err != nil {
+	writeTestFile(t, filepath.Join(repo, "skills", "skill", "SKILL.md"), []byte("---\nname: skill\n---\n"))
+	if err := os.Symlink(outside, filepath.Join(repo, "skills", "skill", "notes.txt")); err != nil {
 		t.Skipf("symlink unavailable: %v", err)
 	}
 	ref := commitTestRepo(t, repo, "add symlinked file")
@@ -335,8 +450,8 @@ func TestRemoteSkillRejectsSymlinkedFiles(t *testing.T) {
 	_, err := RenderAll(&Config{
 		Version: 1,
 		Skills: []Skill{{
-			Name:   "skill",
-			Source: &RemoteSource{Type: "git", URL: repo, Ref: ref, Subdir: "skill"},
+			Name: "skill",
+			Git:  &GitSkill{URL: repo, Ref: ref, Subdir: "skills"},
 		}},
 	}, TargetOptions{KanonHome: kanonHome, UserHome: t.TempDir(), Agent: AgentCodex})
 	if err == nil || !strings.Contains(err.Error(), `source contains symlink "notes.txt"`) {
@@ -375,11 +490,11 @@ func TestRemoteSourceGitErrorRedactsExpandedURLQueryCredentials(t *testing.T) {
 
 func TestRemoteSkillInstallErrorIncludesSkillName(t *testing.T) {
 	root := t.TempDir()
-	_, err := installMaterializedSkill("named", filepath.Join(root, "missing"), filepath.Join(root, "cache"))
+	_, err := installMaterializedSkillSource("named", filepath.Join(root, "missing"), filepath.Join(root, "cache"))
 	if err == nil {
 		t.Fatal("expected install error")
 	}
-	if !strings.Contains(err.Error(), `skill "named" source cache`) {
+	if !strings.Contains(err.Error(), `git skill provider "named" source cache`) {
 		t.Fatalf("expected skill name in install error, got: %v", err)
 	}
 }
@@ -388,17 +503,17 @@ func TestRemoteSkillInstallKeepsConcurrentCacheWinner(t *testing.T) {
 	root := t.TempDir()
 	cachePath := filepath.Join(root, "cache")
 	sourcePath := filepath.Join(root, "source")
-	writeTestFile(t, filepath.Join(cachePath, "SKILL.md"), []byte("winner\n"))
-	writeTestFile(t, filepath.Join(sourcePath, "SKILL.md"), []byte("loser\n"))
+	writeTestFile(t, filepath.Join(cachePath, "winner", "SKILL.md"), []byte("winner\n"))
+	writeTestFile(t, filepath.Join(sourcePath, "loser", "SKILL.md"), []byte("loser\n"))
 
-	got, err := installMaterializedSkill("race", sourcePath, cachePath)
+	got, err := installMaterializedSkillSource("race", sourcePath, cachePath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got != cachePath {
 		t.Fatalf("expected cache path %q, got %q", cachePath, got)
 	}
-	if content := string(readTestFile(t, filepath.Join(cachePath, "SKILL.md"))); content != "winner\n" {
+	if content := string(readTestFile(t, filepath.Join(cachePath, "winner", "SKILL.md"))); content != "winner\n" {
 		t.Fatalf("expected existing cache to win, got %q", content)
 	}
 }
