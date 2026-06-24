@@ -14,7 +14,9 @@ Kanon moves your settings between three states, plus a git remote for sharing:
 - **Source state** — `kanon.yaml` plus `instructions/`, `skills/`, and `hooks/`
   in the Kanon home. The single source of truth, tracked in git.
 - **Target state** — the agent-native files **computed** from the source by the
-  per-agent adapters (`codex`, `claude`). Never stored; recomputed on demand.
+  per-agent adapters (`codex`, `claude`, `gemini`). Never stored; recomputed on
+  demand. Adapters beyond the default two are opt-in (see [Choosing which agents
+  to render](#choosing-which-agents-to-render)).
 - **Destination state** — the real files on this machine.
 
 ### Set up kanon on your current machine
@@ -121,6 +123,9 @@ From the source state, Kanon renders:
 - MCP server definitions
 - hooks
 
+For Gemini CLI, instructions render into `GEMINI.md` and MCP servers plus hooks
+render into `.gemini/settings.json` (`mcpServers` in Gemini's HTTP/SSE shape).
+
 The default flow is preview first (`render` / `diff`), then `apply`. Rendered
 files are compared directly with the destination and overwritten when they
 differ. Files that are not rendered by the current source are outside the apply
@@ -193,6 +198,24 @@ updates the MCP server entries named in the source and preserves other fields
 and server entries. For Claude `settings.json`, Kanon updates the rendered
 `hooks` section and preserves other settings. If an existing co-owned config
 cannot be parsed, the merge stops with an error and the file is left untouched.
+
+### Choosing which agents to render
+
+By default Kanon renders for `codex` and `claude` only. Additional adapters are
+opt-in via a top-level `agents:` list in `kanon.yaml`, so adding a new adapter
+never makes an existing config start writing new files on the next `apply`:
+
+```yaml
+version: 1
+agents: [codex, claude, gemini]   # absent => default (codex, claude)
+instructions:
+  files: [instructions/shared.md]
+```
+
+Per-setting `targets:` still works (e.g. an MCP server with `targets: [gemini]`),
+and `--agent gemini` renders a single agent explicitly regardless of the list.
+The top-level `agents:` list accepts concrete adapter names only; `all` is
+reserved for CLI flags and per-setting targets.
 
 ## Importing existing settings
 

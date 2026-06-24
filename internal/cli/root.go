@@ -43,7 +43,7 @@ It works in three states, mirroring chezmoi:
   source state       kanon.yaml plus instructions/ skills/ hooks/ — the single
                      source of truth, tracked in git
   target state       the agent-native files compiled from the source by the
-                     per-agent adapters (codex, claude)
+                     per-agent adapters (codex, claude, gemini)
   destination state  the real files on this machine (AGENTS.md, CLAUDE.md,
                      ~/.codex, ~/.claude, and project directories)
 
@@ -56,7 +56,7 @@ skill provider pins, and pull/push/update to sync the source with a remote.`,
 	cmd.PersistentFlags().StringVar(&opts.home, "home", "", "Kanon source repository path (defaults to KANON_HOME or ~/.config/kanon)")
 	cmd.PersistentFlags().StringVar(&opts.configPath, "config", "", "config file path (defaults to <home>/kanon.yaml)")
 	cmd.PersistentFlags().StringVar(&opts.project, "project", "", "render project-scoped agent settings into this repository")
-	cmd.PersistentFlags().StringVar(&opts.agent, "agent", core.AgentAll, "agent to manage: all, codex, or claude")
+	cmd.PersistentFlags().StringVar(&opts.agent, "agent", core.AgentAll, "agent to manage: all, codex, claude, or gemini")
 
 	cmd.AddCommand(initCommand(opts))
 	cmd.AddCommand(validateCommand(opts))
@@ -554,7 +554,7 @@ func (opts *options) targetOptions() (core.TargetOptions, error) {
 			return core.TargetOptions{}, err
 		}
 	}
-	if opts.agent != core.AgentAll && opts.agent != core.AgentCodex && opts.agent != core.AgentClaude {
+	if opts.agent != core.AgentAll && !core.IsAgent(opts.agent) {
 		return core.TargetOptions{}, fmt.Errorf("unsupported agent %q", opts.agent)
 	}
 	return core.TargetOptions{

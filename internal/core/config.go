@@ -68,6 +68,15 @@ func ValidateConfig(cfg *Config, home string) []error {
 	if cfg.Version != 1 {
 		errs = append(errs, fmt.Errorf("unsupported version %d", cfg.Version))
 	}
+	for _, agent := range cfg.Agents {
+		if agent == AgentAll {
+			errs = append(errs, fmt.Errorf("agents cannot include %q; list concrete agents", AgentAll))
+			continue
+		}
+		if !IsAgent(agent) {
+			errs = append(errs, fmt.Errorf("agents has unsupported entry %q", agent))
+		}
+	}
 	for _, rel := range cfg.Instructions.Files {
 		if strings.TrimSpace(rel) == "" {
 			errs = append(errs, errors.New("instruction path cannot be empty"))
@@ -141,11 +150,17 @@ func ValidateConfig(cfg *Config, home string) []error {
 			errs = append(errs, fmt.Errorf("mcp server %q requires url or command", name))
 		}
 	}
+	geminiEnabled := hasAgent(cfg.Agents, AgentGemini)
 	for _, hook := range cfg.Hooks {
 		if strings.TrimSpace(hook.Name) == "" {
 			errs = append(errs, errors.New("hook name cannot be empty"))
 		}
 		validateTargets(fmt.Sprintf("hook %q", hook.Name), hook.Targets, &errs)
+		if geminiEnabled && HasTarget(hook.Targets, AgentGemini) {
+			if _, _, err := geminiHookItem(hook); err != nil {
+				errs = append(errs, err)
+			}
+		}
 	}
 	validateEnvRefs("config", cfg, &errs)
 	return errs
@@ -283,9 +298,29 @@ func HasTarget(list []string, agent string) bool {
 
 func validateTargets(label string, targets []string, errs *[]error) {
 	for _, target := range targets {
-		if target != AgentAll && target != AgentCodex && target != AgentClaude {
+		if target != AgentAll && !IsAgent(target) {
 			*errs = append(*errs, fmt.Errorf("%s has unsupported target %q", label, target))
 		}
+	}
+}
+
+func hasAgent(list []string, agent string) bool {
+	for _, item := range list {
+		if item == agent {
+			return true
+		}
+	}
+	return false
+}
+
+// IsAgent reports whether name is a render target Kanon supports. It excludes
+// the "all" pseudo-target.
+func IsAgent(name string) bool {
+	switch name {
+	case AgentCodex, AgentClaude, AgentGemini:
+		return true
+	default:
+		return false
 	}
 }
 

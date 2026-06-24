@@ -5,11 +5,13 @@ import "io/fs"
 const (
 	AgentCodex  = "codex"
 	AgentClaude = "claude"
+	AgentGemini = "gemini"
 	AgentAll    = "all"
 )
 
 type Config struct {
 	Version      int               `yaml:"version"`
+	Agents       []string          `yaml:"agents,omitempty"`
 	Instructions Instructions      `yaml:"instructions"`
 	Skills       []Skill           `yaml:"skills"`
 	MCP          MCPConfig         `yaml:"mcp"`

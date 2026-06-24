@@ -39,7 +39,7 @@ func ImportAll(opts ImportOptions) (*ImportResult, error) {
 	if err := importSkills(merged, opts); err != nil {
 		return nil, err
 	}
-	for _, adapter := range adaptersFor(opts.Agent) {
+	for _, adapter := range adaptersFor(nil, opts.Agent) {
 		result, err := adapter.Import(opts)
 		if err != nil {
 			return nil, err
