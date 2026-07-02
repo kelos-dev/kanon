@@ -59,6 +59,10 @@ func TestRenderUserScopedOutputs(t *testing.T) {
 	if !strings.Contains(claudeAgents, "Shared rules") || !strings.Contains(claudeAgents, "Codex rules") || !strings.Contains(claudeAgents, "Claude rules") {
 		t.Fatalf("claude instructions were not combined: %q", claudeAgents)
 	}
+	openCodeAgents := string(byPath[filepath.Join(userHome, ".config", "opencode", "AGENTS.md")].Content)
+	if !strings.Contains(openCodeAgents, "Shared rules") || !strings.Contains(openCodeAgents, "Codex rules") || !strings.Contains(openCodeAgents, "Claude rules") {
+		t.Fatalf("opencode instructions were not combined: %q", openCodeAgents)
+	}
 	codexConfig := string(byPath[filepath.Join(userHome, ".codex", "config.toml")].Content)
 	if !strings.Contains(codexConfig, "context-server") {
 		t.Fatalf("codex config missing MCP server: %s", codexConfig)
@@ -67,11 +71,67 @@ func TestRenderUserScopedOutputs(t *testing.T) {
 	if !strings.Contains(claudeJSON, `"mcpServers"`) || !strings.Contains(claudeJSON, `"context"`) {
 		t.Fatalf("claude mcp output missing server: %s", claudeJSON)
 	}
+	openCodeJSON := string(byPath[filepath.Join(userHome, ".config", "opencode", "opencode.json")].Content)
+	if !strings.Contains(openCodeJSON, `"mcp"`) || !strings.Contains(openCodeJSON, `"context"`) || !strings.Contains(openCodeJSON, `"command": [`) || !strings.Contains(openCodeJSON, `{env:CONTEXT_TOKEN}`) || strings.Contains(openCodeJSON, "${CONTEXT_TOKEN:-unset}") {
+		t.Fatalf("opencode mcp output missing server: %s", openCodeJSON)
+	}
 	if _, ok := byPath[filepath.Join(userHome, ".agents", "skills", "review", "SKILL.md")]; !ok {
 		t.Fatalf("codex skill was not rendered")
 	}
 	if _, ok := byPath[filepath.Join(userHome, ".claude", "skills", "review", "SKILL.md")]; !ok {
 		t.Fatalf("claude skill was not rendered")
+	}
+	if _, ok := byPath[filepath.Join(userHome, ".config", "opencode", "skills", "review", "SKILL.md")]; !ok {
+		t.Fatalf("opencode skill was not rendered")
+	}
+}
+
+func TestRenderProjectScopedOpenCodeOutputs(t *testing.T) {
+	kanonHome := t.TempDir()
+	project := t.TempDir()
+	writeTestFile(t, filepath.Join(kanonHome, "instructions", "shared.md"), []byte("Shared rules\n"))
+	writeTestFile(t, filepath.Join(kanonHome, "skills", "review", "SKILL.md"), []byte("---\nname: review\n---\n\nReview code.\n"))
+
+	cfg := &Config{
+		Version:      1,
+		Instructions: Instructions{Files: []string{"instructions/shared.md"}},
+		MCP: MCPConfig{Servers: map[string]MCPServer{
+			"context": {
+				Command:           "context-server",
+				Args:              []string{"--stdio"},
+				Env:               map[string]string{"TOKEN": "${CONTEXT_TOKEN:-unset}"},
+				StartupTimeoutSec: 5,
+			},
+		}},
+	}
+
+	files, err := RenderAll(cfg, TargetOptions{
+		KanonHome: kanonHome,
+		UserHome:  t.TempDir(),
+		Project:   project,
+		Agent:     AgentAll,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	byPath := renderedByPath(files)
+	if got := string(byPath[filepath.Join(project, "AGENTS.md")].Content); got != "Shared rules\n" {
+		t.Fatalf("shared project AGENTS.md was not rendered once with expected content: %q", got)
+	}
+	if _, ok := byPath[filepath.Join(project, "opencode.json")]; !ok {
+		t.Fatalf("opencode project config was not rendered")
+	}
+	if _, ok := byPath[filepath.Join(project, ".opencode", "skills", "review", "SKILL.md")]; !ok {
+		t.Fatalf("opencode project skill was not rendered")
+	}
+	var agentsPathCount int
+	for _, file := range files {
+		if file.Path == filepath.Join(project, "AGENTS.md") {
+			agentsPathCount++
+		}
+	}
+	if agentsPathCount != 1 {
+		t.Fatalf("expected one shared AGENTS.md render, got %d: %#v", agentsPathCount, files)
 	}
 }
 
@@ -383,6 +443,30 @@ func TestRemoteSkillDirectoryUsesProviderNamespace(t *testing.T) {
 	}
 	if _, ok := byPath[filepath.Join(userHome, ".agents", "skills", "bundle:review", "SKILL.md")]; !ok {
 		t.Fatalf("remote skill was not rendered with provider namespace")
+	}
+}
+
+func TestOpenCodeRemoteSkillNamespaceUsesValidSkillName(t *testing.T) {
+	kanonHome := t.TempDir()
+	userHome := t.TempDir()
+	repo := t.TempDir()
+	writeTestFile(t, filepath.Join(repo, "packs", "review", "SKILL.md"), []byte("---\nname: review\n---\n"))
+	ref := commitTestRepo(t, repo, "add remote skill")
+
+	files, err := RenderAll(&Config{
+		Version: 1,
+		Skills: []Skill{{
+			Name: "Shared.Pack",
+			Git:  &GitSkill{URL: repo, Ref: ref, Subdir: "packs"},
+		}},
+	}, TargetOptions{KanonHome: kanonHome, UserHome: userHome, Agent: AgentOpenCode})
+	if err != nil {
+		t.Fatal(err)
+	}
+	byPath := renderedByPath(files)
+	path := filepath.Join(userHome, ".config", "opencode", "skills", "shared-pack-review", "SKILL.md")
+	if !strings.Contains(string(byPath[path].Content), "name: shared-pack-review") {
+		t.Fatalf("remote OpenCode skill was not rendered with a valid namespaced name: %#v", byPath[path])
 	}
 }
 

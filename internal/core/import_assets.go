@@ -11,31 +11,36 @@ import (
 	"slices"
 )
 
+type instructionSource struct {
+	agent    string
+	path     string
+	fallback bool
+	content  []byte
+}
+
 func importInstructions(result *ImportResult, opts ImportOptions) error {
 	if opts.InstructionPolicy == InstructionPolicySkip {
 		return nil
 	}
-	codexPath := filepath.Join(opts.UserHome, ".codex", "AGENTS.md")
-	claudePath := filepath.Join(opts.UserHome, ".claude", "CLAUDE.md")
-	if opts.Project != "" {
-		codexPath = filepath.Join(opts.Project, "AGENTS.md")
-		claudePath = filepath.Join(opts.Project, "CLAUDE.md")
-	}
-	var codex, claude []byte
-	var err error
+	var sources []instructionSource
 	if opts.Agent == AgentAll || opts.Agent == AgentCodex {
-		codex, err = readIfExists(codexPath)
-		if err != nil {
-			return err
-		}
+		sources = append(sources, instructionSource{agent: AgentCodex, path: codexInstructionPath(opts)})
 	}
 	if opts.Agent == AgentAll || opts.Agent == AgentClaude {
-		claude, err = readIfExists(claudePath)
+		sources = append(sources, instructionSource{agent: AgentClaude, path: claudeInstructionPath(opts)})
+	}
+	if opts.Agent == AgentAll || opts.Agent == AgentOpenCode {
+		sources = append(sources, openCodeInstructionSources(opts)...)
+	}
+	for i := range sources {
+		data, err := readIfExists(sources[i].path)
 		if err != nil {
 			return err
 		}
+		sources[i].content = data
 	}
-	content, err := chooseInstructionContent(codex, claude, opts.InstructionPolicy)
+	sources = effectiveInstructionSources(sources)
+	content, err := chooseInstructionContentFromSources(sources, opts.InstructionPolicy)
 	if err != nil {
 		return err
 	}
@@ -49,54 +54,126 @@ func importInstructions(result *ImportResult, opts ImportOptions) error {
 }
 
 func chooseInstructionContent(codex, claude []byte, policy InstructionPolicy) ([]byte, error) {
-	codex = bytes.TrimSpace(codex)
-	claude = bytes.TrimSpace(claude)
+	return chooseInstructionContentFromSources([]instructionSource{
+		{agent: AgentCodex, content: codex},
+		{agent: AgentClaude, content: claude},
+	}, policy)
+}
+
+func effectiveInstructionSources(sources []instructionSource) []instructionSource {
+	hasPrimary := map[string]bool{}
+	for _, source := range sources {
+		if !source.fallback && len(bytes.TrimSpace(source.content)) > 0 {
+			hasPrimary[source.agent] = true
+		}
+	}
+	out := sources[:0]
+	for _, source := range sources {
+		if source.fallback && hasPrimary[source.agent] {
+			continue
+		}
+		out = append(out, source)
+	}
+	return out
+}
+
+func chooseInstructionContentFromSources(sources []instructionSource, policy InstructionPolicy) ([]byte, error) {
+	for i := range sources {
+		sources[i].content = bytes.TrimSpace(sources[i].content)
+	}
 	switch policy {
 	case InstructionPolicyCodex:
-		if len(codex) == 0 {
-			return nil, fmt.Errorf("instruction policy %q selected but Codex AGENTS.md was not found", policy)
-		}
-		return append(codex, '\n'), nil
+		return selectedInstructionContent(sources, policy, AgentCodex)
 	case InstructionPolicyClaude:
-		if len(claude) == 0 {
-			return nil, fmt.Errorf("instruction policy %q selected but Claude CLAUDE.md was not found", policy)
-		}
-		return append(claude, '\n'), nil
+		return selectedInstructionContent(sources, policy, AgentClaude)
+	case InstructionPolicyOpenCode:
+		return selectedInstructionContent(sources, policy, AgentOpenCode)
 	case InstructionPolicyMerge:
-		return mergeInstructionContent(codex, claude), nil
+		return mergeInstructionSourceContent(sources), nil
 	case InstructionPolicyAuto:
-		if len(codex) == 0 {
-			return appendIfNotEmpty(claude), nil
+		var selected []instructionSource
+		for _, source := range sources {
+			if len(source.content) > 0 {
+				selected = append(selected, source)
+			}
 		}
-		if len(claude) == 0 || bytes.Equal(codex, claude) {
-			return append(codex, '\n'), nil
+		if len(selected) == 0 {
+			return nil, nil
 		}
-		return nil, fmt.Errorf("AGENTS.md and CLAUDE.md differ; rerun with --instruction-policy codex, claude, merge, or skip")
+		first := selected[0].content
+		for _, source := range selected[1:] {
+			if !bytes.Equal(first, source.content) {
+				return nil, fmt.Errorf("agent instruction files differ; rerun with --instruction-policy codex, claude, opencode, merge, or skip")
+			}
+		}
+		return append(first, '\n'), nil
 	default:
 		return nil, nil
 	}
 }
 
-func mergeInstructionContent(codex, claude []byte) []byte {
-	if len(codex) == 0 {
-		return appendIfNotEmpty(claude)
+func selectedInstructionContent(sources []instructionSource, policy InstructionPolicy, agent string) ([]byte, error) {
+	for _, source := range sources {
+		if source.agent == agent && len(source.content) > 0 {
+			return append(source.content, '\n'), nil
+		}
 	}
-	if len(claude) == 0 || bytes.Equal(codex, claude) {
-		return append(codex, '\n')
-	}
-	var out bytes.Buffer
-	out.Write(codex)
-	out.WriteString("\n\n")
-	out.Write(claude)
-	out.WriteByte('\n')
-	return out.Bytes()
+	return nil, fmt.Errorf("instruction policy %q selected but %s was not found", policy, instructionLabel(agent))
 }
 
-func appendIfNotEmpty(data []byte) []byte {
-	if len(data) == 0 {
+func instructionLabel(agent string) string {
+	switch agent {
+	case AgentCodex:
+		return "Codex AGENTS.md"
+	case AgentClaude:
+		return "Claude CLAUDE.md"
+	case AgentOpenCode:
+		return "OpenCode AGENTS.md"
+	default:
+		return "agent instructions"
+	}
+}
+
+func mergeInstructionContent(codex, claude []byte) []byte {
+	return mergeInstructionSourceContent([]instructionSource{
+		{content: codex},
+		{content: claude},
+	})
+}
+
+func mergeInstructionSourceContent(sources []instructionSource) []byte {
+	var contents [][]byte
+	for _, source := range sources {
+		content := bytes.TrimSpace(source.content)
+		if len(content) == 0 {
+			continue
+		}
+		duplicate := false
+		for _, existing := range contents {
+			if bytes.Equal(existing, content) {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			contents = append(contents, content)
+		}
+	}
+	if len(contents) == 0 {
 		return nil
 	}
-	return append(data, '\n')
+	if len(contents) == 1 {
+		return append(contents[0], '\n')
+	}
+	var out bytes.Buffer
+	for i, content := range contents {
+		if i > 0 {
+			out.WriteString("\n\n")
+		}
+		out.Write(content)
+	}
+	out.WriteByte('\n')
+	return out.Bytes()
 }
 
 func importSkills(result *ImportResult, opts ImportOptions) error {
@@ -107,12 +184,17 @@ func importSkills(result *ImportResult, opts ImportOptions) error {
 	var roots []root
 	if opts.Agent == AgentAll || opts.Agent == AgentCodex {
 		roots = append(roots,
-			root{path: filepath.Join(opts.UserHome, ".agents", "skills"), target: AgentCodex},
-			root{path: filepath.Join(opts.UserHome, ".codex", "skills"), target: AgentCodex},
+			root{path: filepath.Join(skillImportBase(opts), ".agents", "skills"), target: AgentCodex},
+			root{path: filepath.Join(skillImportBase(opts), ".codex", "skills"), target: AgentCodex},
 		)
 	}
 	if opts.Agent == AgentAll || opts.Agent == AgentClaude {
-		roots = append(roots, root{path: filepath.Join(opts.UserHome, ".claude", "skills"), target: AgentClaude})
+		roots = append(roots, root{path: filepath.Join(skillImportBase(opts), ".claude", "skills"), target: AgentClaude})
+	}
+	if opts.Agent == AgentAll || opts.Agent == AgentOpenCode {
+		for _, path := range openCodeSkillImportPaths(opts) {
+			roots = append(roots, root{path: path, target: AgentOpenCode})
+		}
 	}
 	seen := map[string]string{}
 	for _, root := range roots {
@@ -205,6 +287,9 @@ func uniqueSkillName(base, target, hash string, seen map[string]string) string {
 func addSkillTarget(cfg *Config, name, target string) {
 	for i := range cfg.Skills {
 		if cfg.Skills[i].Name == name {
+			if len(cfg.Skills[i].Targets) == 0 {
+				return
+			}
 			if !slices.Contains(cfg.Skills[i].Targets, target) {
 				cfg.Skills[i].Targets = append(cfg.Skills[i].Targets, target)
 			}
@@ -215,8 +300,57 @@ func addSkillTarget(cfg *Config, name, target string) {
 }
 
 func normalizeImportedSkillTargets(targets []string) []string {
-	if slices.Contains(targets, AgentCodex) && slices.Contains(targets, AgentClaude) {
+	if slices.Contains(targets, AgentCodex) && slices.Contains(targets, AgentClaude) && slices.Contains(targets, AgentOpenCode) {
 		return nil
 	}
 	return targets
+}
+
+func codexInstructionPath(opts ImportOptions) string {
+	if opts.Project != "" {
+		return filepath.Join(opts.Project, "AGENTS.md")
+	}
+	return filepath.Join(opts.UserHome, ".codex", "AGENTS.md")
+}
+
+func claudeInstructionPath(opts ImportOptions) string {
+	if opts.Project != "" {
+		return filepath.Join(opts.Project, "CLAUDE.md")
+	}
+	return filepath.Join(opts.UserHome, ".claude", "CLAUDE.md")
+}
+
+func openCodeInstructionSources(opts ImportOptions) []instructionSource {
+	if opts.Project != "" {
+		return []instructionSource{
+			{agent: AgentOpenCode, path: filepath.Join(opts.Project, "AGENTS.md")},
+			{agent: AgentOpenCode, path: filepath.Join(opts.Project, "CLAUDE.md"), fallback: true},
+		}
+	}
+	return []instructionSource{
+		{agent: AgentOpenCode, path: filepath.Join(opts.UserHome, ".config", "opencode", "AGENTS.md")},
+		{agent: AgentOpenCode, path: filepath.Join(opts.UserHome, ".claude", "CLAUDE.md"), fallback: true},
+	}
+}
+
+func skillImportBase(opts ImportOptions) string {
+	if opts.Project != "" {
+		return opts.Project
+	}
+	return opts.UserHome
+}
+
+func openCodeSkillImportPaths(opts ImportOptions) []string {
+	if opts.Project != "" {
+		return []string{
+			filepath.Join(opts.Project, ".opencode", "skills"),
+			filepath.Join(opts.Project, ".claude", "skills"),
+			filepath.Join(opts.Project, ".agents", "skills"),
+		}
+	}
+	return []string{
+		filepath.Join(opts.UserHome, ".config", "opencode", "skills"),
+		filepath.Join(opts.UserHome, ".claude", "skills"),
+		filepath.Join(opts.UserHome, ".agents", "skills"),
+	}
 }

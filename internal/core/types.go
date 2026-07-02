@@ -3,9 +3,10 @@ package core
 import "io/fs"
 
 const (
-	AgentCodex  = "codex"
-	AgentClaude = "claude"
-	AgentAll    = "all"
+	AgentCodex    = "codex"
+	AgentClaude   = "claude"
+	AgentOpenCode = "opencode"
+	AgentAll      = "all"
 )
 
 type Config struct {
@@ -79,6 +80,7 @@ type MCPServer struct {
 	DisabledTools     []string                 `yaml:"disabled_tools"`
 	DefaultApproval   string                   `yaml:"default_approval"`
 	Tools             map[string]MCPToolPolicy `yaml:"tools"`
+	OpenCodeEnabled   *bool                    `yaml:"opencode_enabled,omitempty"`
 	Targets           []string                 `yaml:"targets,omitempty"`
 	Enabled           *bool                    `yaml:"enabled"`
 }
@@ -124,11 +126,12 @@ const (
 type InstructionPolicy string
 
 const (
-	InstructionPolicyAuto   InstructionPolicy = "auto"
-	InstructionPolicyCodex  InstructionPolicy = "codex"
-	InstructionPolicyClaude InstructionPolicy = "claude"
-	InstructionPolicyMerge  InstructionPolicy = "merge"
-	InstructionPolicySkip   InstructionPolicy = "skip"
+	InstructionPolicyAuto     InstructionPolicy = "auto"
+	InstructionPolicyCodex    InstructionPolicy = "codex"
+	InstructionPolicyClaude   InstructionPolicy = "claude"
+	InstructionPolicyOpenCode InstructionPolicy = "opencode"
+	InstructionPolicyMerge    InstructionPolicy = "merge"
+	InstructionPolicySkip     InstructionPolicy = "skip"
 )
 
 type RenderedFile struct {
@@ -146,6 +149,7 @@ const (
 	FileMergeCodexConfig    FileMergeStrategy = "codex_config"
 	FileMergeClaudeSettings FileMergeStrategy = "claude_settings"
 	FileMergeClaudeMCP      FileMergeStrategy = "claude_mcp"
+	FileMergeOpenCodeConfig FileMergeStrategy = "opencode_config"
 )
 
 type Adapter interface {

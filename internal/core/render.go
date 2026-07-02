@@ -24,6 +24,11 @@ func RenderAll(cfg *Config, opts TargetOptions) ([]RenderedFile, error) {
 		}
 		files = append(files, rendered...)
 	}
+	var err error
+	files, err = dedupeRenderedFiles(files)
+	if err != nil {
+		return nil, err
+	}
 	sort.Slice(files, func(i, j int) bool {
 		if files[i].Path == files[j].Path {
 			return files[i].Agent < files[j].Agent
@@ -60,9 +65,28 @@ func adaptersFor(agent string) []Adapter {
 		return []Adapter{codexAdapter{}}
 	case AgentClaude:
 		return []Adapter{claudeAdapter{}}
+	case AgentOpenCode:
+		return []Adapter{openCodeAdapter{}}
 	default:
-		return []Adapter{codexAdapter{}, claudeAdapter{}}
+		return []Adapter{codexAdapter{}, claudeAdapter{}, openCodeAdapter{}}
 	}
+}
+
+func dedupeRenderedFiles(files []RenderedFile) ([]RenderedFile, error) {
+	byPath := map[string]RenderedFile{}
+	var out []RenderedFile
+	for _, file := range files {
+		existing, ok := byPath[file.Path]
+		if !ok {
+			byPath[file.Path] = file
+			out = append(out, file)
+			continue
+		}
+		if existing.Mode != file.Mode || existing.Merge != file.Merge || !bytes.Equal(existing.Content, file.Content) {
+			return nil, fmt.Errorf("multiple agents render different content for %s (%s and %s)", file.Path, existing.Agent, file.Agent)
+		}
+	}
+	return out, nil
 }
 
 func readInstruction(home string, paths []string) ([]byte, error) {
@@ -171,7 +195,7 @@ func renderSkills(cfg *Config, opts TargetOptions, agent, targetRoot string) ([]
 		}
 		owner := fmt.Sprintf("git skill provider %q", name)
 		for _, item := range items {
-			renderName := namespacedSkillName(name, item.Name)
+			renderName := skillProviderRenderName(agent, name, item.Name)
 			if err := renderSkillDirectory(&files, rendered, agent, targetRoot, renderName, item.Path, owner, renderName); err != nil {
 				return nil, err
 			}
@@ -284,6 +308,13 @@ func remoteSkillProviderPath(home, id string, git GitSkill, lock *SourceLock) (s
 
 func namespacedSkillName(providerID, skillName string) string {
 	return providerID + ":" + skillName
+}
+
+func skillProviderRenderName(agent, providerID, skillName string) string {
+	if agent == AgentOpenCode {
+		return openCodeSkillName(providerID + "-" + skillName)
+	}
+	return namespacedSkillName(providerID, skillName)
 }
 
 func localSkillDirectoryItems(home string) ([]materializedSkillDirectoryItem, error) {

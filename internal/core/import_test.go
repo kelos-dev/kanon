@@ -144,6 +144,7 @@ func TestImportInstructionPolicy(t *testing.T) {
 	userHome := t.TempDir()
 	writeTestFile(t, filepath.Join(userHome, ".codex", "AGENTS.md"), []byte("Codex rules\n"))
 	writeTestFile(t, filepath.Join(userHome, ".claude", "CLAUDE.md"), []byte("Claude rules\n"))
+	writeTestFile(t, filepath.Join(userHome, ".config", "opencode", "AGENTS.md"), []byte("OpenCode rules\n"))
 
 	_, err := ImportAll(ImportOptions{
 		TargetOptions: TargetOptions{
@@ -171,8 +172,24 @@ func TestImportInstructionPolicy(t *testing.T) {
 		t.Fatalf("unexpected imported instruction files: %#v", result.Config.Instructions.Files)
 	}
 	content := string(result.Files[filepath.Join("instructions", "imported.md")])
-	if !strings.Contains(content, "Codex rules") || !strings.Contains(content, "Claude rules") {
+	if !strings.Contains(content, "Codex rules") || !strings.Contains(content, "Claude rules") || !strings.Contains(content, "OpenCode rules") {
 		t.Fatalf("merged instruction content missing source data: %q", content)
+	}
+
+	result, err = ImportAll(ImportOptions{
+		TargetOptions: TargetOptions{
+			KanonHome: t.TempDir(),
+			UserHome:  userHome,
+			Agent:     AgentAll,
+		},
+		InstructionPolicy: InstructionPolicyOpenCode,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	content = string(result.Files[filepath.Join("instructions", "imported.md")])
+	if content != "OpenCode rules\n" {
+		t.Fatalf("opencode instruction policy selected %q", content)
 	}
 }
 
@@ -181,6 +198,7 @@ func TestImportSkillsIntoNeutralTargets(t *testing.T) {
 	skill := []byte("---\nname: review\n---\n\nReview code.\n")
 	writeTestFile(t, filepath.Join(userHome, ".agents", "skills", "review", "SKILL.md"), skill)
 	writeTestFile(t, filepath.Join(userHome, ".claude", "skills", "review", "SKILL.md"), skill)
+	writeTestFile(t, filepath.Join(userHome, ".config", "opencode", "skills", "review", "SKILL.md"), skill)
 
 	result, err := ImportAll(ImportOptions{
 		TargetOptions: TargetOptions{
@@ -252,6 +270,7 @@ func TestWriteSelectedImportOmitsAllTargetLocalSkillConfig(t *testing.T) {
 	skill := []byte("---\nname: review\n---\n\nReview code.\n")
 	writeTestFile(t, filepath.Join(userHome, ".agents", "skills", "review", "SKILL.md"), skill)
 	writeTestFile(t, filepath.Join(userHome, ".claude", "skills", "review", "SKILL.md"), skill)
+	writeTestFile(t, filepath.Join(userHome, ".config", "opencode", "skills", "review", "SKILL.md"), skill)
 
 	plan, err := PlanImport(ImportOptions{
 		TargetOptions: TargetOptions{
@@ -288,6 +307,7 @@ func TestWriteSelectedImportReplacesRestrictiveSkillConfigWithImplicitLocalSkill
 	writeTestFile(t, reviewPath, skill)
 	writeTestFile(t, filepath.Join(userHome, ".agents", "skills", "review", "SKILL.md"), skill)
 	writeTestFile(t, filepath.Join(userHome, ".claude", "skills", "review", "SKILL.md"), skill)
+	writeTestFile(t, filepath.Join(userHome, ".config", "opencode", "skills", "review", "SKILL.md"), skill)
 	if err := WriteConfig(filepath.Join(kanonHome, "kanon.yaml"), &Config{
 		Version: 1,
 		Skills:  []Skill{{Name: "review", Targets: []string{AgentCodex}}},
@@ -456,6 +476,161 @@ trust_level = "trusted"
 	}
 	if !strings.Contains(warnings, `skipped unsupported claude json field "autoUpdates"`) {
 		t.Fatalf("unmapped claude json was not reported: %v", result.Warnings)
+	}
+}
+
+func TestImportNormalizesOpenCodeConfig(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "available")
+
+	userHome := t.TempDir()
+	writeTestFile(t, filepath.Join(userHome, ".config", "opencode", "opencode.json"), []byte(`{
+  // OpenCode accepts JSONC config files.
+  "mcp": {
+    "github": {
+      "type": "local",
+      "command": ["github-mcp", "stdio"],
+      "environment": {"GITHUB_TOKEN": "{env:GITHUB_TOKEN}"},
+      "timeout": 5500,
+    },
+    "private": {
+      "type": "remote",
+      "url": "https://mcp.example.com/mcp",
+      "headers": {
+        "Authorization": "Bearer {env:MCP_TOKEN}",
+        "X-Public": "public",
+        "X-Env": "{env:X_ENV}",
+      },
+    },
+  },
+  "model": "anthropic/claude-sonnet-4-5",
+}`))
+
+	result, err := ImportAll(ImportOptions{
+		TargetOptions: TargetOptions{
+			KanonHome: t.TempDir(),
+			UserHome:  userHome,
+			Agent:     AgentOpenCode,
+		},
+		InstructionPolicy: InstructionPolicySkip,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	github := result.Config.MCP.Servers["github"]
+	if github.Command != "github-mcp" || !slices.Equal(github.Args, []string{"stdio"}) {
+		t.Fatalf("opencode local MCP command was not normalized: %#v", github)
+	}
+	if github.Env["GITHUB_TOKEN"] != "${GITHUB_TOKEN}" {
+		t.Fatalf("opencode environment ref was not normalized: %#v", github.Env)
+	}
+	if github.StartupTimeoutSec != 6 {
+		t.Fatalf("opencode timeout was not rounded to seconds: %#v", github)
+	}
+	private := result.Config.MCP.Servers["private"]
+	if private.URL != "https://mcp.example.com/mcp" {
+		t.Fatalf("opencode remote MCP url was not normalized: %#v", private)
+	}
+	if private.BearerTokenEnvVar != "MCP_TOKEN" {
+		t.Fatalf("opencode bearer header was not normalized: %#v", private)
+	}
+	if private.EnvHeaders["X-Env"] != "X_ENV" || private.Headers["X-Public"] != "public" {
+		t.Fatalf("opencode headers were not split correctly: %#v", private)
+	}
+	warnings := strings.Join(result.Warnings, "\n")
+	if !strings.Contains(warnings, `skipped unsupported opencode config field "model"`) {
+		t.Fatalf("unmapped opencode config was not reported: %v", result.Warnings)
+	}
+	if errs := ValidateConfig(result.Config, t.TempDir()); len(errs) > 0 {
+		t.Fatalf("imported opencode config failed validation: %v", errs)
+	}
+}
+
+func TestImportOpenCodeEnabledDoesNotDisableOtherAgents(t *testing.T) {
+	userHome := t.TempDir()
+	writeTestFile(t, filepath.Join(userHome, ".codex", "config.toml"), []byte(`
+[mcp_servers.github]
+command = "github-mcp"
+`))
+	writeTestFile(t, filepath.Join(userHome, ".config", "opencode", "opencode.json"), []byte(`{
+  "mcp": {
+    "github": {
+      "type": "local",
+      "command": ["github-mcp"],
+      "enabled": false
+    }
+  }
+}`))
+
+	result, err := ImportAll(ImportOptions{
+		TargetOptions: TargetOptions{
+			KanonHome: t.TempDir(),
+			UserHome:  userHome,
+			Agent:     AgentAll,
+		},
+		InstructionPolicy: InstructionPolicySkip,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := result.Config.MCP.Servers["github"]
+	if server.Enabled != nil {
+		t.Fatalf("opencode native enabled field was imported as global enabled: %#v", server)
+	}
+	if server.OpenCodeEnabled == nil || *server.OpenCodeEnabled {
+		t.Fatalf("opencode native enabled field was not preserved: %#v", server)
+	}
+	if !slices.Contains(server.Targets, AgentCodex) || !slices.Contains(server.Targets, AgentOpenCode) {
+		t.Fatalf("merged server targets missing active agents: %#v", server)
+	}
+
+	files, err := RenderAll(result.Config, TargetOptions{
+		KanonHome: t.TempDir(),
+		UserHome:  userHome,
+		Agent:     AgentAll,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	byPath := renderedByPath(files)
+	codexConfig := string(byPath[filepath.Join(userHome, ".codex", "config.toml")].Content)
+	if !strings.Contains(codexConfig, "github-mcp") {
+		t.Fatalf("codex server was disabled by opencode import: %s", codexConfig)
+	}
+	openCodeConfig := string(byPath[filepath.Join(userHome, ".config", "opencode", "opencode.json")].Content)
+	if !strings.Contains(openCodeConfig, `"enabled": false`) {
+		t.Fatalf("opencode native enabled field was not rendered: %s", openCodeConfig)
+	}
+}
+
+func TestImportOpenCodeCompatibilityPaths(t *testing.T) {
+	userHome := t.TempDir()
+	skill := []byte("---\nname: review\n---\n\nReview code.\n")
+	writeTestFile(t, filepath.Join(userHome, ".claude", "CLAUDE.md"), []byte("Claude fallback rules\n"))
+	writeTestFile(t, filepath.Join(userHome, ".agents", "skills", "review", "SKILL.md"), skill)
+
+	result, err := ImportAll(ImportOptions{
+		TargetOptions: TargetOptions{
+			KanonHome: t.TempDir(),
+			UserHome:  userHome,
+			Agent:     AgentOpenCode,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(result.Files[filepath.Join("instructions", "imported.md")])
+	if content != "Claude fallback rules\n" {
+		t.Fatalf("opencode compatibility instruction was not imported: %q", content)
+	}
+	if len(result.Config.Skills) != 1 {
+		t.Fatalf("expected one compatibility skill import, got %#v", result.Config.Skills)
+	}
+	imported := result.Config.Skills[0]
+	if imported.Name != "review" || !slices.Equal(imported.Targets, []string{AgentOpenCode}) {
+		t.Fatalf("opencode compatibility skill targets were not preserved: %#v", imported)
+	}
+	if string(result.Files[filepath.Join("skills", "review", "SKILL.md")]) != string(skill) {
+		t.Fatalf("opencode compatibility skill file was not imported: %#v", result.Files)
 	}
 }
 
