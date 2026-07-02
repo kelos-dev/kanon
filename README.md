@@ -201,6 +201,109 @@ OpenCode's native MCP `enabled` field is represented as `opencode_enabled` in
 `kanon.yaml`. The top-level `enabled` field remains Kanon's source-level switch
 for all agents.
 
+## `kanon.yaml` reference
+
+`kanon.yaml` is the neutral source file Kanon renders into agent-native files.
+Relative paths are resolved from the Kanon home, which defaults to
+`~/.config/kanon`. Fields with `targets` render to all supported agents when the
+field is omitted or empty; otherwise use `codex`, `claude`, or `all`.
+
+```yaml
+version: 1
+instructions:
+  files:
+    - instructions/shared.md
+skills:
+  - name: example
+    path: skills/example
+    targets: [codex, claude]
+    enabled: true
+mcp:
+  servers:
+    docs:
+      command: npx
+      args: ["-y", "@example/docs-mcp"]
+      env:
+        API_KEY: "${DOCS_API_KEY}"
+      targets: [codex]
+      enabled: true
+hooks:
+  - name: stop-check
+    event: Stop
+    matcher: ""
+    type: command
+    command: hooks/stop-check.sh
+    args: []
+    timeout: 30
+    async: false
+    targets: [claude]
+metadata:
+  owner: team-dev
+```
+
+Top-level fields:
+
+| Field | Type | Description |
+|---|---|---|
+| `version` | integer | Schema version. Omitted or `0` is treated as `1`; other versions fail validation. |
+| `instructions.files` | list of strings | Instruction files to concatenate, separated by a blank line. Renders to `AGENTS.md` for Codex and `CLAUDE.md` for Claude. |
+| `skills` | list | Skill directories to copy into each agent's skill directory. |
+| `mcp.servers` | map | MCP server definitions keyed by server name. |
+| `hooks` | list | Agent hook definitions. |
+| `metadata` | map of strings | Optional metadata stored in the source file. Kanon currently preserves it but does not render it. |
+
+Skill fields:
+
+| Field | Type | Description |
+|---|---|---|
+| `name` | string | Required skill name. Also used as the default source directory name. |
+| `path` | string | Optional source directory. Defaults to `skills/<name>`. The directory must contain `SKILL.md` for validation. |
+| `targets` | list of strings | Optional agent filter: `codex`, `claude`, or `all`. |
+| `enabled` | boolean | Optional. Defaults to `true`; `false` skips validation and rendering for the skill. |
+
+MCP server fields:
+
+| Field | Type | Description |
+|---|---|---|
+| `type` | string | Claude MCP server type. If omitted for Claude, Kanon uses `http` when `url` is set, otherwise `stdio`. Not rendered for Codex. |
+| `command` | string | Command for stdio servers. Validation requires either `command` or `url`. |
+| `args` | list of strings | Command arguments. |
+| `env` | map of strings | Environment variables passed to the MCP server. |
+| `env_vars` | list of strings | Codex-only environment variable allowlist rendered as `env_vars`. |
+| `url` | string | URL for HTTP servers. Validation requires either `url` or `command`. |
+| `headers` | map of strings | Literal HTTP headers. Rendered as Codex `http_headers` and Claude `headers`. |
+| `env_headers` | map of strings | Header names mapped to environment variable names. Rendered as Codex `env_http_headers`; for Claude, values render as `${ENV_NAME}` in `headers`. |
+| `bearer_token_env_var` | string | Codex-only bearer token environment variable field. |
+| `startup_timeout_sec` | integer | Startup timeout in seconds. Rendered as Codex `startup_timeout_sec` and Claude `timeout`. |
+| `tool_timeout_sec` | integer | Codex-only tool timeout in seconds. |
+| `enabled_tools` | list of strings | Codex-only list of enabled MCP tools. |
+| `disabled_tools` | list of strings | Codex-only list of disabled MCP tools. |
+| `default_approval` | string | Codex-only default MCP tool approval. Rendered as `default_tool_approval`. |
+| `tools` | map | Codex-only per-tool policy map. |
+| `targets` | list of strings | Optional agent filter: `codex`, `claude`, or `all`. |
+| `enabled` | boolean | Optional. Defaults to `true`; `false` skips validation and rendering for the server. |
+
+Each entry under an MCP server's `tools` map supports `description`,
+`approval`, and `approval_prompt`; these render only to Codex.
+
+Hook fields:
+
+| Field | Type | Description |
+|---|---|---|
+| `name` | string | Required hook name. If `event` is omitted, `name` is used as the hook event. |
+| `event` | string | Agent hook event name. Hooks without `event` or `name` are skipped during rendering. |
+| `matcher` | string | Optional matcher rendered with the hook item. |
+| `type` | string | Hook handler type. If omitted and `command` is set, Kanon renders `command`. |
+| `command` | string | Hook command. |
+| `args` | list of strings | Hook command arguments. |
+| `timeout` | integer | Timeout in seconds. Omitted from rendered files when `0`. |
+| `async` | boolean | Renders `async: true` when set. |
+| `targets` | list of strings | Optional agent filter: `codex`, `claude`, or `all`. |
+
+String values can reference environment variables with `${NAME}` or
+`${NAME:-default}`. Validation fails when `${NAME}` references an unset
+environment variable without a default.
+
 ## Importing existing settings
 
 ```sh
