@@ -319,6 +319,28 @@ func TestLockUpdateAllRefreshesExistingPinAfterBranchMoves(t *testing.T) {
 	}
 }
 
+func TestLockUpdateNamedRemovedSkillDropsStaleEntry(t *testing.T) {
+	repo, ref := newRemoteSkillRepo(t, "version one\n")
+	home := t.TempDir()
+	writeRemoteSkillConfig(t, home, repo, ref)
+	runKanon(t, home, "lock")
+
+	writeFile(t, filepath.Join(home, "kanon.yaml"), "version: 1\n")
+	runKanon(t, home, "lock", "update", "remote-review")
+
+	lock, _, err := core.LoadSourceLock(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(lock.Sources) != 0 {
+		t.Fatalf("lock update kept removed skill entry: %#v", lock.Sources)
+	}
+	checkOut := runKanon(t, home, "lock", "check")
+	if !strings.Contains(checkOut, "kanon.lock is valid.") {
+		t.Fatalf("unexpected check output: %s", checkOut)
+	}
+}
+
 func TestRenderUsesLockedRemoteSkillAfterBranchMoves(t *testing.T) {
 	repo, ref := newRemoteSkillRepo(t, "version one\n")
 	home := t.TempDir()

@@ -33,6 +33,74 @@ func TestUpdateRemoteSkillSourcesCompletesMissingEntries(t *testing.T) {
 	}
 }
 
+func TestUpdateRemoteSkillSourcesAcceptsRemovedSkillName(t *testing.T) {
+	home := t.TempDir()
+	repoOne := remoteSkillRepo(t, "one")
+	repoTwo := remoteSkillRepo(t, "two")
+	original := &Config{
+		Version: 1,
+		Skills: []Skill{
+			{Name: "one", Git: &GitSkill{URL: repoOne.path, Ref: repoOne.ref}},
+			{Name: "two", Git: &GitSkill{URL: repoTwo.path, Ref: repoTwo.ref}},
+		},
+	}
+	initial, err := LockRemoteSkillSources(original, home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := WriteSourceLock(home, initial); err != nil {
+		t.Fatal(err)
+	}
+
+	updated, err := UpdateRemoteSkillSources(&Config{
+		Version: 1,
+		Skills: []Skill{
+			{Name: "two", Git: &GitSkill{URL: repoTwo.path, Ref: repoTwo.ref}},
+		},
+	}, home, []string{"one"}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := sourceLockEntry(updated, "skill.git.one"); ok {
+		t.Fatalf("lock kept removed skill entry: %#v", updated.Sources)
+	}
+	if _, ok := sourceLockEntry(updated, "skill.git.two"); !ok {
+		t.Fatalf("lock missing remaining skill entry: %#v", updated.Sources)
+	}
+}
+
+func TestUpdateRemoteSkillSourcesAcceptsAmbiguousLegacyRemovedSkillName(t *testing.T) {
+	home := t.TempDir()
+	if _, err := WriteSourceLock(home, &SourceLock{Sources: []SourceLockEntry{{
+		Owner:         "skill.git.foo",
+		Type:          "git",
+		URL:           "https://example.invalid/repo.git",
+		Ref:           "main",
+		ResolvedRef:   "abc123",
+		ContentSHA256: "sha256:abc123",
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+
+	updated, err := UpdateRemoteSkillSources(&Config{Version: 1}, home, []string{"git.foo"}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(updated.Sources) != 0 {
+		t.Fatalf("lock kept removed legacy skill entry: %#v", updated.Sources)
+	}
+}
+
+func TestUpdateRemoteSkillSourcesRejectsUnknownName(t *testing.T) {
+	_, err := UpdateRemoteSkillSources(&Config{Version: 1}, t.TempDir(), []string{"missing"}, false)
+	if err == nil {
+		t.Fatal("expected unknown provider error")
+	}
+	if !strings.Contains(err.Error(), `git skill provider "missing" not found in enabled config or kanon.lock`) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestLockRemoteSkillSourcesIncludesSkillDirectories(t *testing.T) {
 	home := t.TempDir()
 	repo := remoteSkillDirectoryRepo(t)

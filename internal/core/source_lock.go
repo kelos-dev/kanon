@@ -126,18 +126,14 @@ func UpdateRemoteSkillSources(cfg *Config, home string, names []string, all bool
 	}
 	items := enabledRemoteSkillSources(cfg)
 	currentByName := map[string]remoteSkillSource{}
+	currentOwners := map[string]bool{}
 	updateNames := map[string]bool{}
 	for _, item := range items {
 		if _, ok := currentByName[item.Name]; ok {
 			return nil, fmt.Errorf("git skill provider name %q is ambiguous", item.Name)
 		}
 		currentByName[item.Name] = item
-	}
-	for _, name := range names {
-		if _, ok := currentByName[name]; !ok {
-			return nil, fmt.Errorf("enabled git skill provider %q not found", name)
-		}
-		updateNames[name] = true
+		currentOwners[item.Owner] = true
 	}
 
 	lock, _, err := LoadSourceLock(home)
@@ -145,6 +141,21 @@ func UpdateRemoteSkillSources(cfg *Config, home string, names []string, all bool
 		return nil, err
 	}
 	existing := sourceLockEntriesByOwner(lock)
+	staleByName := map[string]bool{}
+	for _, entry := range existing {
+		if !currentOwners[entry.Owner] {
+			for _, name := range sourceLockEntryProviderNames(entry.Owner) {
+				staleByName[name] = true
+			}
+		}
+	}
+	for _, name := range names {
+		if _, ok := currentByName[name]; !ok && !staleByName[name] {
+			return nil, fmt.Errorf("git skill provider %q not found in enabled config or kanon.lock", name)
+		}
+		updateNames[name] = true
+	}
+
 	entries := map[string]SourceLockEntry{}
 	for _, item := range items {
 		if updateNames[item.Name] {
@@ -166,7 +177,10 @@ func UpdateRemoteSkillSources(cfg *Config, home string, names []string, all bool
 		entries[item.Owner] = entry
 	}
 	for _, name := range names {
-		item := currentByName[name]
+		item, ok := currentByName[name]
+		if !ok {
+			continue
+		}
 		entry, err := resolveSourceLockEntry(home, item)
 		if err != nil {
 			return nil, err
@@ -281,6 +295,21 @@ func sourceLockEntriesByOwner(lock *SourceLock) map[string]SourceLockEntry {
 		entries[entry.Owner] = entry
 	}
 	return entries
+}
+
+func sourceLockEntryProviderNames(owner string) []string {
+	var names []string
+	seen := map[string]bool{}
+	for _, prefix := range []string{"skill.git.", "skill_source.", "skill."} {
+		if strings.HasPrefix(owner, prefix) {
+			name := strings.TrimPrefix(owner, prefix)
+			if name != "" && !seen[name] {
+				names = append(names, name)
+				seen[name] = true
+			}
+		}
+	}
+	return names
 }
 
 func entryMatchesRemoteSource(entry SourceLockEntry, source RemoteSource) error {
