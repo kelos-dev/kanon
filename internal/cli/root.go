@@ -43,9 +43,9 @@ It works in three states, mirroring chezmoi:
   source state       kanon.yaml plus instructions/ skills/ hooks/ — the single
                      source of truth, tracked in git
   target state       the agent-native files compiled from the source by the
-                     per-agent adapters (codex, claude)
+                     per-agent adapters (codex, claude, opencode)
   destination state  the real files on this machine (AGENTS.md, CLAUDE.md,
-                     ~/.codex, ~/.claude, and project directories)
+                     ~/.codex, ~/.claude, ~/.config/opencode, and project directories)
 
 Commands move data between these states: render (source to target), diff and
 apply (target to destination), import (destination back to source), lock git
@@ -56,7 +56,7 @@ skill provider pins, and pull/push/update to sync the source with a remote.`,
 	cmd.PersistentFlags().StringVar(&opts.home, "home", "", "Kanon source repository path (defaults to KANON_HOME or ~/.config/kanon)")
 	cmd.PersistentFlags().StringVar(&opts.configPath, "config", "", "config file path (defaults to <home>/kanon.yaml)")
 	cmd.PersistentFlags().StringVar(&opts.project, "project", "", "render project-scoped agent settings into this repository")
-	cmd.PersistentFlags().StringVar(&opts.agent, "agent", core.AgentAll, "agent to manage: all, codex, or claude")
+	cmd.PersistentFlags().StringVar(&opts.agent, "agent", core.AgentAll, "agent to manage: all, codex, claude, or opencode")
 
 	cmd.AddCommand(initCommand(opts))
 	cmd.AddCommand(validateCommand(opts))
@@ -392,7 +392,7 @@ func importCommand(opts *options) *cobra.Command {
 	cmd.Flags().BoolVar(&opts.write, "write", false, "write imported config and files into the Kanon home")
 	cmd.Flags().BoolVar(&opts.force, "force", false, "overwrite an existing kanon.yaml during import")
 	cmd.Flags().StringVar(&opts.secretPolicy, "secret-policy", string(core.SecretPolicyKeep), "secret handling during import: keep")
-	cmd.Flags().StringVar(&opts.instructionPolicy, "instruction-policy", string(core.InstructionPolicyAuto), "instruction handling during import: auto, codex, claude, merge, or skip")
+	cmd.Flags().StringVar(&opts.instructionPolicy, "instruction-policy", string(core.InstructionPolicyAuto), "instruction handling during import: auto, codex, claude, opencode, merge, or skip")
 	return cmd
 }
 
@@ -554,7 +554,7 @@ func (opts *options) targetOptions() (core.TargetOptions, error) {
 			return core.TargetOptions{}, err
 		}
 	}
-	if opts.agent != core.AgentAll && opts.agent != core.AgentCodex && opts.agent != core.AgentClaude {
+	if opts.agent != core.AgentAll && opts.agent != core.AgentCodex && opts.agent != core.AgentClaude && opts.agent != core.AgentOpenCode {
 		return core.TargetOptions{}, fmt.Errorf("unsupported agent %q", opts.agent)
 	}
 	return core.TargetOptions{

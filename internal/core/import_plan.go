@@ -405,7 +405,7 @@ func stringFiles(files map[string][]byte) map[string]string {
 }
 
 func importTargetsAgent(targets []string) string {
-	if len(targets) == 1 && (targets[0] == AgentCodex || targets[0] == AgentClaude) {
+	if len(targets) == 1 && (targets[0] == AgentCodex || targets[0] == AgentClaude || targets[0] == AgentOpenCode) {
 		return targets[0]
 	}
 	return AgentAll

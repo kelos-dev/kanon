@@ -23,7 +23,7 @@ func uiCommand(opts *options) *cobra.Command {
 	cmd.Flags().BoolVarP(&opts.dryRun, "dry-run", "n", false, "start in dry-run mode (preview applies without writing)")
 	cmd.Flags().StringVar(&opts.uiMode, "mode", string(tui.ModeApply), "initial UI mode: apply or import")
 	cmd.Flags().StringVar(&opts.secretPolicy, "secret-policy", string(core.SecretPolicyKeep), "secret handling during import mode: keep")
-	cmd.Flags().StringVar(&opts.instructionPolicy, "instruction-policy", string(core.InstructionPolicyAuto), "instruction handling during import mode: auto, codex, claude, merge, or skip")
+	cmd.Flags().StringVar(&opts.instructionPolicy, "instruction-policy", string(core.InstructionPolicyAuto), "instruction handling during import mode: auto, codex, claude, opencode, merge, or skip")
 	return cmd
 }
 

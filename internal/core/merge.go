@@ -19,6 +19,8 @@ func MergeRenderedContent(strategy FileMergeStrategy, path string, existing, des
 		return mergeJSONFields(path, existing, desired, "hooks")
 	case FileMergeClaudeMCP:
 		return mergeJSONMapField(path, existing, desired, "mcpServers")
+	case FileMergeOpenCodeConfig:
+		return mergeOpenCodeConfig(path, existing, desired)
 	default:
 		return nil, fmt.Errorf("unsupported merge strategy %q for %s", strategy, path)
 	}
@@ -90,6 +92,43 @@ func mergeJSONMapField(path string, existing, desired []byte, field string) ([]b
 	}
 	if data, ok := mergeExistingJSONObjectMembers(existing, field, desiredMap, false); ok {
 		return data, nil
+	}
+	return renderJSON(existingDoc)
+}
+
+func mergeOpenCodeConfig(path string, existing, desired []byte) ([]byte, error) {
+	existingDoc, err := parseOpenCodeJSONDocument(path, existing)
+	if err != nil {
+		return nil, err
+	}
+	originalDoc, err := parseOpenCodeJSONDocument(path, existing)
+	if err != nil {
+		return nil, err
+	}
+	desiredDoc, err := parseJSONDocument(path, desired)
+	if err != nil {
+		return nil, fmt.Errorf("generated content for %s is invalid: %w", path, err)
+	}
+	desiredMap, ok, err := objectValue(desiredDoc, "mcp")
+	if err != nil {
+		return nil, fmt.Errorf("generated content for %s is invalid: %w", path, err)
+	}
+	if !ok {
+		return renderJSON(existingDoc)
+	}
+	existingMap, ok, err := objectValue(existingDoc, "mcp")
+	if err != nil {
+		return nil, fmt.Errorf("cannot merge %s: %w", path, err)
+	}
+	if !ok {
+		existingMap = map[string]any{}
+	}
+	for name, value := range desiredMap {
+		existingMap[name] = value
+	}
+	existingDoc["mcp"] = existingMap
+	if reflect.DeepEqual(existingDoc, originalDoc) {
+		return existing, nil
 	}
 	return renderJSON(existingDoc)
 }
@@ -552,6 +591,20 @@ func parseJSONDocument(path string, data []byte) (map[string]any, error) {
 	}
 	var doc map[string]any
 	if err := json.Unmarshal(data, &doc); err != nil {
+		return nil, fmt.Errorf("cannot parse %s for merge: %w", path, err)
+	}
+	if doc == nil {
+		doc = map[string]any{}
+	}
+	return doc, nil
+}
+
+func parseOpenCodeJSONDocument(path string, data []byte) (map[string]any, error) {
+	if len(bytes.TrimSpace(data)) == 0 {
+		return map[string]any{}, nil
+	}
+	var doc map[string]any
+	if err := openCodeJSONUnmarshal(data, &doc); err != nil {
 		return nil, fmt.Errorf("cannot parse %s for merge: %w", path, err)
 	}
 	if doc == nil {

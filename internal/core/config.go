@@ -283,7 +283,7 @@ func HasTarget(list []string, agent string) bool {
 
 func validateTargets(label string, targets []string, errs *[]error) {
 	for _, target := range targets {
-		if target != AgentAll && target != AgentCodex && target != AgentClaude {
+		if target != AgentAll && target != AgentCodex && target != AgentClaude && target != AgentOpenCode {
 			*errs = append(*errs, fmt.Errorf("%s has unsupported target %q", label, target))
 		}
 	}

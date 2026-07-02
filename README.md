@@ -14,7 +14,8 @@ Kanon moves your settings between three states, plus a git remote for sharing:
 - **Source state** — `kanon.yaml` plus `instructions/`, `skills/`, and `hooks/`
   in the Kanon home. The single source of truth, tracked in git.
 - **Target state** — the agent-native files **computed** from the source by the
-  per-agent adapters (`codex`, `claude`). Never stored; recomputed on demand.
+  per-agent adapters (`codex`, `claude`, `opencode`). Never stored; recomputed on
+  demand.
 - **Destination state** — the real files on this machine.
 
 ### Set up kanon on your current machine
@@ -101,7 +102,7 @@ The source repository defaults to `~/.config/kanon`; set `KANON_HOME` or pass
 `--home` to point elsewhere. On another machine, `kanon update` pulls and applies
 in one step; use `kanon pull` / `kanon push` for explicit git sync.
 
-If this machine already has Codex or Claude settings, start with
+If this machine already has Codex, Claude, or OpenCode settings, start with
 `kanon import --ui`. It lets you review discovered instructions, skills, MCP
 servers, and hooks one item at a time before adding them to the Kanon source.
 
@@ -117,7 +118,7 @@ in a repository that is shared across machines.
 From the source state, Kanon renders:
 
 - instructions into `AGENTS.md` and `CLAUDE.md`
-- skills into Codex and Claude skill directories
+- skills into Codex, Claude, and OpenCode skill directories
 - MCP server definitions
 - hooks
 
@@ -189,11 +190,16 @@ entry or remove a stale entry for a removed provider. Use
 `kanon lock update --all` to refresh every enabled git skill provider.
 
 Co-owned config files that the agent also writes are merged instead of replaced.
-For Codex `config.toml` and Claude `.claude.json` / project `.mcp.json`, Kanon
-updates the MCP server entries named in the source and preserves other fields
-and server entries. For Claude `settings.json`, Kanon updates the rendered
-`hooks` section and preserves other settings. If an existing co-owned config
-cannot be parsed, the merge stops with an error and the file is left untouched.
+For Codex `config.toml`, Claude `.claude.json` / project `.mcp.json`, and
+OpenCode `opencode.json`, Kanon updates the MCP server entries named in the
+source and preserves other fields and server entries. For Claude
+`settings.json`, Kanon updates the rendered `hooks` section and preserves other
+settings. If an existing co-owned config cannot be parsed, the merge stops with
+an error and the file is left untouched.
+
+OpenCode's native MCP `enabled` field is represented as `opencode_enabled` in
+`kanon.yaml`. The top-level `enabled` field remains Kanon's source-level switch
+for all agents.
 
 ## Importing existing settings
 
@@ -204,8 +210,9 @@ kanon import --agent all --write
 kanon import --agent all --write --force
 ```
 
-`import` runs the pipeline in reverse: it reads existing Codex and Claude files
-(the destination state) and normalizes them back into the neutral source state.
+`import` runs the pipeline in reverse: it reads existing Codex, Claude, and
+OpenCode files (the destination state) and normalizes them back into the neutral
+source state.
 For interactive use, prefer `kanon import --ui`: it reviews discovered
 instructions, skills, MCP servers, and hooks as selectable import units before
 writing them into the source. The same import review is available from
@@ -226,7 +233,7 @@ preserved and reported with warnings so you can move them to environment
 references or another secret manager manually. Future policies for env refs,
 omission, password managers, and encrypted secrets are tracked in code TODOs.
 
-If both `AGENTS.md` and `CLAUDE.md` exist and differ, import stops by default.
-Re-run with `--instruction-policy codex`, `claude`, `merge`, or `skip` to choose
-how to create neutral instructions. `--write` refuses to replace an existing
-`kanon.yaml`; use `--force` when intentionally re-importing.
+If discovered agent instruction files exist and differ, import stops by default.
+Re-run with `--instruction-policy codex`, `claude`, `opencode`, `merge`, or
+`skip` to choose how to create neutral instructions. `--write` refuses to
+replace an existing `kanon.yaml`; use `--force` when intentionally re-importing.

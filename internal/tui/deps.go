@@ -23,7 +23,7 @@ type SelectedChange struct {
 type Deps struct {
 	Home     string
 	UserHome string
-	Agent    string // "all", "codex", or "claude"
+	Agent    string // "all", "codex", "claude", or "opencode"
 	Project  string
 	DryRun   bool
 	Mode     Mode

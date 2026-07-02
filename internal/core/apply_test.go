@@ -411,6 +411,98 @@ func TestClaudeMCPMergePreservesExistingFieldsAndServers(t *testing.T) {
 	}
 }
 
+func TestOpenCodeConfigMergePreservesExistingFieldsAndServers(t *testing.T) {
+	kanonHome := t.TempDir()
+	userHome := t.TempDir()
+	configPath := filepath.Join(userHome, ".config", "opencode", "opencode.json")
+	writeTestFile(t, configPath, []byte(`{
+  "model": "anthropic/claude-sonnet-4-5",
+  "mcp": {
+    "github": {"type":"local","command":["old-github"]},
+    "private": {"type":"local","command":["private-mcp"]}
+  }
+}`))
+	cfg := &Config{
+		Version: 1,
+		MCP: MCPConfig{Servers: map[string]MCPServer{
+			"github": {Command: "github-mcp", Args: []string{"stdio"}, Targets: []string{AgentOpenCode}},
+		}},
+	}
+
+	files, err := RenderAll(cfg, TargetOptions{KanonHome: kanonHome, UserHome: userHome, Agent: AgentOpenCode})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := PlanFiles(files, ApplyOptions{KanonHome: kanonHome})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ApplyFiles(plan, ApplyOptions{KanonHome: kanonHome}); err != nil {
+		t.Fatal(err)
+	}
+	var merged map[string]any
+	if err := json.Unmarshal(readTestFile(t, configPath), &merged); err != nil {
+		t.Fatal(err)
+	}
+	if merged["model"] != "anthropic/claude-sonnet-4-5" {
+		t.Fatalf("merged OpenCode config dropped model: %#v", merged)
+	}
+	servers := merged["mcp"].(map[string]any)
+	if _, ok := servers["private"]; !ok {
+		t.Fatalf("merged OpenCode config dropped private server: %#v", servers)
+	}
+	github := servers["github"].(map[string]any)
+	command := github["command"].([]any)
+	if command[0] != "github-mcp" || command[1] != "stdio" {
+		t.Fatalf("merged OpenCode config did not replace github server: %#v", github)
+	}
+}
+
+func TestOpenCodeConfigMergeAcceptsJSONC(t *testing.T) {
+	kanonHome := t.TempDir()
+	userHome := t.TempDir()
+	configPath := filepath.Join(userHome, ".config", "opencode", "opencode.json")
+	writeTestFile(t, configPath, []byte(`{
+  // OpenCode accepts comments in config files.
+  "model": "anthropic/claude-sonnet-4-5",
+  "mcp": {
+    "github": {"type":"local","command":["old-github"]},
+    "private": {"type":"local","command":["private-mcp"]},
+  },
+}`))
+	cfg := &Config{
+		Version: 1,
+		MCP: MCPConfig{Servers: map[string]MCPServer{
+			"github": {Command: "github-mcp", Args: []string{"stdio"}, Targets: []string{AgentOpenCode}},
+		}},
+	}
+
+	files, err := RenderAll(cfg, TargetOptions{KanonHome: kanonHome, UserHome: userHome, Agent: AgentOpenCode})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := PlanFiles(files, ApplyOptions{KanonHome: kanonHome})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ApplyFiles(plan, ApplyOptions{KanonHome: kanonHome}); err != nil {
+		t.Fatal(err)
+	}
+	var merged map[string]any
+	if err := json.Unmarshal(readTestFile(t, configPath), &merged); err != nil {
+		t.Fatal(err)
+	}
+	servers := merged["mcp"].(map[string]any)
+	if _, ok := servers["private"]; !ok {
+		t.Fatalf("merged OpenCode JSONC config dropped private server: %#v", servers)
+	}
+	github := servers["github"].(map[string]any)
+	command := github["command"].([]any)
+	if command[0] != "github-mcp" || command[1] != "stdio" {
+		t.Fatalf("merged OpenCode JSONC config did not replace github server: %#v", github)
+	}
+}
+
 func TestCoOwnedConfigMergeRejectsInvalidExistingFile(t *testing.T) {
 	kanonHome := t.TempDir()
 	userHome := t.TempDir()

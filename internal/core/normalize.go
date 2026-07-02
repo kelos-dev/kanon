@@ -273,6 +273,19 @@ func mergeMCPServer(existing, incoming MCPServer) MCPServer {
 	if out.DefaultApproval == "" {
 		out.DefaultApproval = incoming.DefaultApproval
 	}
+	if out.Tools == nil {
+		out.Tools = incoming.Tools
+	} else {
+		for key, value := range incoming.Tools {
+			out.Tools[key] = value
+		}
+	}
+	if out.OpenCodeEnabled == nil {
+		out.OpenCodeEnabled = incoming.OpenCodeEnabled
+	}
+	if out.Enabled == nil {
+		out.Enabled = incoming.Enabled
+	}
 	out.Targets = mergeTargets(out.Targets, incoming.Targets)
 	return out
 }

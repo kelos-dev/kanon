@@ -60,7 +60,7 @@ func ValidateSecretPolicy(policy SecretPolicy) error {
 
 func ValidateInstructionPolicy(policy InstructionPolicy) error {
 	switch policy {
-	case InstructionPolicyAuto, InstructionPolicyCodex, InstructionPolicyClaude, InstructionPolicyMerge, InstructionPolicySkip:
+	case InstructionPolicyAuto, InstructionPolicyCodex, InstructionPolicyClaude, InstructionPolicyOpenCode, InstructionPolicyMerge, InstructionPolicySkip:
 		return nil
 	default:
 		return fmt.Errorf("unsupported instruction policy %q", policy)
@@ -236,6 +236,7 @@ func looksSecret(key, value string) bool {
 
 func isSecretReference(value string) bool {
 	return envRefPattern.MatchString(value) ||
+		openCodeEnvRefPattern.MatchString(value) ||
 		value == redactedSecret ||
 		value == legacyRedactedSecret ||
 		strings.HasPrefix(value, "op://")

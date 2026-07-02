@@ -47,7 +47,7 @@ func TestRenderPrintsTargetState(t *testing.T) {
 	}
 
 	got := out.String()
-	for _, want := range []string{"==> [claude]", "CLAUDE.md", "==> [codex]", "AGENTS.md", "Shared Agent Instructions"} {
+	for _, want := range []string{"==> [claude]", "CLAUDE.md", "==> [codex]", "AGENTS.md", "==> [opencode]", "Shared Agent Instructions"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("render output missing %q\n%s", want, got)
 		}
@@ -82,7 +82,7 @@ func TestUpdatePullsAndApplies(t *testing.T) {
 	}
 
 	// The apply step should have written the rendered instruction files.
-	for _, rel := range []string{".codex/AGENTS.md", ".claude/CLAUDE.md"} {
+	for _, rel := range []string{".codex/AGENTS.md", ".claude/CLAUDE.md", ".config/opencode/AGENTS.md"} {
 		if _, err := os.Stat(filepath.Join(userHome, rel)); err != nil {
 			t.Fatalf("update did not apply %s: %v\n%s", rel, err, out.String())
 		}
@@ -119,7 +119,7 @@ func TestApplyDryRunWritesNothing(t *testing.T) {
 			t.Fatalf("dry run output missing %q; plan diff body not printed?\n%s", want, out.String())
 		}
 	}
-	for _, rel := range []string{".codex/AGENTS.md", ".claude/CLAUDE.md"} {
+	for _, rel := range []string{".codex/AGENTS.md", ".claude/CLAUDE.md", ".config/opencode/AGENTS.md"} {
 		if _, err := os.Stat(filepath.Join(userHome, rel)); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("dry run wrote %s (err=%v)\n%s", rel, err, out.String())
 		}
@@ -177,7 +177,7 @@ func TestUpdateDryRunPullsButWritesNothing(t *testing.T) {
 		t.Fatalf("update -n did not pull: home HEAD=%s want=%s\n%s", got, want, out.String())
 	}
 	// But the destination is left untouched and no state is recorded.
-	for _, rel := range []string{".codex/AGENTS.md", ".claude/CLAUDE.md"} {
+	for _, rel := range []string{".codex/AGENTS.md", ".claude/CLAUDE.md", ".config/opencode/AGENTS.md"} {
 		if _, err := os.Stat(filepath.Join(userHome, rel)); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("dry run wrote %s (err=%v)\n%s", rel, err, out.String())
 		}

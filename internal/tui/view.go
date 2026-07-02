@@ -67,7 +67,7 @@ func (m Model) renderAgents() string {
 	b.WriteString(m.styles.AgentActive.Render("mode: " + string(m.mode)))
 	b.WriteByte('\n')
 	b.WriteByte('\n')
-	for _, a := range []string{core.AgentClaude, core.AgentCodex} {
+	for _, a := range []string{core.AgentClaude, core.AgentCodex, core.AgentOpenCode} {
 		active := m.deps.Agent == core.AgentAll || m.deps.Agent == a
 		label := fmt.Sprintf("%s (%d)", a, counts[a])
 		if active {
