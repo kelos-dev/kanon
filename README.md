@@ -184,8 +184,9 @@ coordinates still match, so it will not silently advance a branch.
 Use `kanon lock check` in CI to fail when a git skill provider is missing from the
 lockfile, its configured coordinates changed, its declared ref now resolves
 somewhere else, or the cached content does not match the locked hash. Use
-`kanon lock update <provider-name>` or `kanon lock update --all` to intentionally
-refresh lock entries.
+`kanon lock update <provider-name>` to intentionally refresh a provider lock
+entry or remove a stale entry for a removed provider. Use
+`kanon lock update --all` to refresh every enabled git skill provider.
 
 Co-owned config files that the agent also writes are merged instead of replaced.
 For Codex `config.toml` and Claude `.claude.json` / project `.mcp.json`, Kanon
